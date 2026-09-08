@@ -40,6 +40,8 @@ type runCtx struct {
 	calver  string
 	workdir string
 	env     map[string]string
+	report  map[string]any // the entity's report: block (template/schema/bed_template)
+	media   map[string]any // the entity's media: block (files/min/dir)
 }
 
 // StageResult is one ledger row.
@@ -156,6 +158,9 @@ func ledgerRef(id string) (*StageResult, bool) {
 
 func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir string) error {
 	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap()}
+	rc.report = mm(mapOf(p.Report))
+	rc.media = mm(p.Media)
+
 	l := newLedger()
 	curLedger = l
 
@@ -181,13 +186,17 @@ func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir st
 		}
 		start := time.Now()
 		res, err := rc.runStage(ctx, kind, id, raw, l)
+		fmt.Printf("[stage %s] %s%s\n", id, res.Status, statusSuffix(res))
 		res.Duration = time.Since(start)
 		if res.ID == "" {
 			res.ID = id
 		}
 		l.put(res)
 		if err != nil {
-			// FAIL-HARD
+			// FAIL-HARD (with the ledger for evidence)
+			if workdir != "" {
+				_ = dumpLedger(l, filepath.Join(workdir, "stage-findings.yml"))
+			}
 			return fmt.Errorf("[stage %s] FAIL-HARD: %w", id, err)
 		}
 		if res.Status == "escalate" {
@@ -231,6 +240,23 @@ func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir st
 	return nil
 }
 
+func statusSuffix(res *StageResult) string {
+	if res.Message != "" {
+		return " — " + res.Message
+	}
+	return ""
+}
+
+func mapOf(v any) map[string]any {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return map[string]any{}
+	}
+	var m map[string]any
+	_ = json.Unmarshal(b, &m)
+	return m
+}
+
 func envMap() map[string]string {
 	m := map[string]string{}
 	for _, kv := range os.Environ() {
@@ -260,7 +286,7 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		input := rc.resolveValue(anyMap(raw["input"]))
 		inputMap, _ := input.(map[string]any)
 		for _, v := range verbs {
-			ok, msg := runProbe(v, inputMap)
+			ok, msg, val := runProbeV(v, inputMap)
 			if !ok {
 				res.Status = "fail"
 				res.Message = msg
@@ -271,7 +297,17 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 				res.Outputs = map[string]any{}
 			}
 			res.Outputs[v] = "pass"
+			if val != nil {
+				res.Outputs["value"] = val
+			}
 		}
+		// honor the stage's declared outputs: name -> the probe value (e.g. resolve_channel)
+		for _, o := range strList(raw["outputs"]) {
+			if val, found := res.Outputs["value"]; found && o == "channel" {
+				res.Outputs[o] = val
+			}
+		}
+		delete(res.Outputs, "value")
 		return res, nil
 	case "check":
 		bed := rc.resolveRefs(asString(raw["bed"]))

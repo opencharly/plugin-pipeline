@@ -14,8 +14,10 @@ var tmplRe = regexp.MustCompile("\\$\\{[A-Za-z0-9_.]+\\}|\\$(pr|calver|workdir)|
 
 func (rc *runCtx) runGenerate(raw map[string]any) error {
 	tmpl := s(raw["template"])
-	if tmpl == "" {
-		tmpl = resolveTemplate(raw)
+	if ref := s(raw["template"]); strings.HasPrefix(ref, "$report.") {
+		if v, ok := rc.report[strings.TrimPrefix(ref, "$report.")]; ok {
+			tmpl, _ = v.(string)
+		}
 	}
 	vars := mm(raw["vars"])
 	out := rc.resolveRefs(s(raw["out"]))

@@ -36,11 +36,8 @@ func runCLI(args []string) (int, error) {
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline validate <entity>")
 		}
-		p, err := lookup(rest[0])
+		p, err := loadEntity(rest[0])
 		if err != nil {
-			return 1, err
-		}
-		if err := validatePipeline(p); err != nil {
 			return 1, err
 		}
 		fmt.Printf("pipeline %s: valid (%d stages)\n", rest[0], len(p.Stages))
@@ -49,7 +46,7 @@ func runCLI(args []string) (int, error) {
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline run <entity>")
 		}
-		p, err := lookup(rest[0])
+		p, err := loadEntity(rest[0])
 		if err != nil {
 			return 1, err
 		}
