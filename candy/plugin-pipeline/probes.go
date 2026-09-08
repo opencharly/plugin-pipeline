@@ -58,6 +58,51 @@ func ss(v any) []string {
 }
 func mm(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
+// runProbeV returns (ok, message, value) — the value powers probe stage outputs
+// (e.g. resolve_channel returns the resolved channel).
+func runProbeV(word string, input map[string]any) (bool, string, any) {
+	if input == nil {
+		input = map[string]any{}
+	}
+	switch word {
+	case "media_gate":
+		ok, msg := probeMediaGate(input)
+		return ok, msg, nil
+	case "lock_audit":
+		ok, msg := probeLockAudit(input)
+		return ok, msg, nil
+	case "evidence_audit":
+		if ok, msg := probeMediaGate(input); !ok {
+			return ok, msg, nil
+		}
+		ok, msg := probeLockAudit(input)
+		return ok, msg, nil
+	case "golden_present", "head_freshness", "sequencing", "lanes_ok", "config_audit":
+		ok, msg := runProbe(word, input)
+		return ok, msg, nil
+	case "resolve_channel":
+		ok, msg, ch := probeResolveChannelV(input)
+		return ok, msg, ch
+	}
+	ok, msg := runProbe(word, input)
+	return ok, msg, nil
+}
+
+func probeResolveChannelV(input map[string]any) (bool, string, any) {
+	channels := mm(input["channels"])
+	def := s(input["default"])
+	if def == "" {
+		def = "stable"
+	}
+	if len(channels) == 0 {
+		return false, "resolve_channel: no channels registry", nil
+	}
+	if _, ok := channels[def]; !ok {
+		return false, "resolve_channel: default not in registry: " + def, nil
+	}
+	return true, "", def
+}
+
 func runProbe(word string, input map[string]any) (bool, string) {
 	if input == nil {
 		input = map[string]any{}
@@ -95,16 +140,34 @@ func probeMediaGate(input map[string]any) (bool, string) {
 		return false, "media_gate: dir + files required"
 	}
 	for _, f := range files {
-		p := filepath.Join(dir, f)
-		st, err := os.Stat(p)
-		if err != nil {
-			return false, fmt.Sprintf("media_gate: missing %s", p)
+		// accept both pr-<pr>.<ext> (the media stage naming) and the bare <ext>
+		cands := []string{filepath.Join(dir, "pr-"+prN()+"."+f), filepath.Join(dir, f)}
+		ok := false
+		for _, p := range cands {
+			if st, err := os.Stat(p); err == nil {
+				ok = true
+				if want := i(min[f]); want > 0 && st.Size() < int64(want) {
+					return false, fmt.Sprintf("media_gate: size %d < min %d", st.Size(), want)
+				}
+				break
+			}
 		}
-		if want := i(min[f]); want > 0 && st.Size() < int64(want) {
-			return false, fmt.Sprintf("media_gate: size %d < min %d", st.Size(), want)
+		if !ok {
+			return false, fmt.Sprintf("media_gate: missing %s (or pr-<pr>%s)", filepath.Join(dir, f), f)
 		}
 	}
 	return true, ""
+}
+
+// prN: the current run's pr for the media naming (set by runPlan via rc).
+func prN() string {
+	if p := os.Getenv("EVAL_PR_NUMBER"); p != "" {
+		return p
+	}
+	if p := os.Getenv("PR_NUMBER"); p != "" {
+		return p
+	}
+	return "unknown"
 }
 
 var lockRe = regexp.MustCompile("(?i)database is locked|failed to get.*write.*lock")

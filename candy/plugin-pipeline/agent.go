@@ -183,7 +183,32 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 }
 
 // extractJSON: pull "key": value from a JSON-ish agent response.
+// "plan-json" is the whole-plan special case: the agent's single JSON object
+// (the Config-Oracle contract) — return it as a map for @stage.plan-json.field refs.
 func extractJSON(resp, key string) any {
+	if key == "plan-json" {
+		start := strings.Index(resp, "{")
+		if start < 0 {
+			return resp
+		}
+		depth := 0
+		for i := start; i < len(resp); i++ {
+			switch resp[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					var v any
+					if err := json.Unmarshal([]byte(resp[start:i+1]), &v); err == nil {
+						return v
+					}
+					return resp
+				}
+			}
+		}
+		return resp
+	}
 	idx := strings.Index(resp, "\""+key+"\"")
 	if idx < 0 {
 		return resp

@@ -126,9 +126,12 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 }
 
 func TestCLIValidate(t *testing.T) {
-	entityCache["test-plan"] = params.PipelineInput{
-		Stages: []params.Stage{{"id": "s", "kind": "gate", "condition": "true"}},
+	dir := t.TempDir()
+	cfg := "test-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
 	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
 	code, err := runCLI([]string{"validate", "test-plan"})
 	if err != nil || code != 0 {
 		t.Fatalf("validate: %d %v", code, err)
