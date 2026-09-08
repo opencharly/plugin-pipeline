@@ -1,0 +1,21 @@
+plugin-pipeline:
+    candy:
+        version: 2026.251.0000
+        description: |-
+            The generic agent/workflow engine — domain-neutral: the bare agent
+            runtime (plan agent stage + the standalone 'charly pipeline agent'),
+            the plan executor ('charly pipeline run <entity>'), deterministic
+            probe verbs, template/frontmatter rendering, redo + fail-hard,
+            skills by @github candy refs. Every pipeline is a declared plan
+            (kind:pipeline entity, SDD CUE-first).
+        plugin:
+            providers:
+                - command:pipeline
+                - verb:pipeline
+                - kind:pipeline
+            source: github.com/opencharly/plugin-pipeline/candy/plugin-pipeline
+        plan:
+            - check: the pipeline module ships (go.mod + the executor + generated params)
+              id: plugin-pipeline-module-present
+              context: [build]
+              command: "test -f go.mod && test -f executor.go && test -f params/cue_types_gen.go"
