@@ -97,10 +97,13 @@ func probeResolveChannelV(input map[string]any) (bool, string, any) {
 	if len(channels) == 0 {
 		return false, "resolve_channel: no channels registry", nil
 	}
-	if _, ok := channels[def]; !ok {
+	entry, ok := channels[def]
+	if !ok {
 		return false, "resolve_channel: default not in registry: " + def, nil
 	}
-	return true, "", def
+	// the VALUE is the registry ENTRY (golden/provision fields), so the probe
+	// stage can expose them as outputs and the lane can render the bed's from:.
+	return true, "", entry
 }
 
 func runProbe(word string, input map[string]any) (bool, string) {
