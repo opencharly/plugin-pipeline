@@ -93,6 +93,18 @@ func runCLI(args []string) (int, error) {
 	return 2, fmt.Errorf("pipeline: unknown mode %q", mode)
 }
 
+// CliMain: the OUT-OF-PROCESS CLI-mode entry (sdk.Main dual mode).
+func CliMain(args []string) int {
+	exit, err := runCLI(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pipeline: "+err.Error())
+		if exit == 0 {
+			exit = 1
+		}
+	}
+	return exit
+}
+
 func has(args []string, f string) bool {
 	for _, a := range args {
 		if a == f {

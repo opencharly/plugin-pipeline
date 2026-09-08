@@ -6,5 +6,5 @@ import (
 )
 
 func main() {
-	sdk.Serve(pluginpipeline.NewProvider(), pluginpipeline.NewMeta())
+	sdk.Main(pluginpipeline.NewProvider(), pluginpipeline.NewMeta(), pluginpipeline.CliMain)
 }
