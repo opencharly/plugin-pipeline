@@ -301,10 +301,20 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 				res.Outputs["value"] = val
 			}
 		}
-		// honor the stage's declared outputs: name -> the probe value (e.g. resolve_channel)
+		// expose the probe VALUE: the declared outputs map to it (e.g. resolve_channel
+		// -> channel), and map values spread as named outputs (golden/provision).
 		for _, o := range strList(raw["outputs"]) {
 			if val, found := res.Outputs["value"]; found && o == "channel" {
 				res.Outputs[o] = val
+			}
+		}
+		if val, found := res.Outputs["value"]; found {
+			if m, ok := val.(map[string]any); ok {
+				for k, v := range m {
+					res.Outputs[k] = v
+				}
+			} else {
+				res.Outputs["channel"] = val
 			}
 		}
 		delete(res.Outputs, "value")
