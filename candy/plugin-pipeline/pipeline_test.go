@@ -119,7 +119,7 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	t.Setenv("EVAL_LLM_MODEL", "mock")
 	t.Setenv("EVAL_LLM_API_KEY", "k")
-	resp, err := runAgent(t.Context(), "omarchy EVAL_ORACLE_MARKER system", "triage pr 10140", []string{"pr"})
+	resp, err := runAgent(t.Context(), nil, "omarchy EVAL_ORACLE_MARKER system", "triage pr 10140", []string{"pr"})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
 	}

@@ -11,6 +11,7 @@
 	redo?: { max?: int, escalate_after?: int }
 	concurrency?: { lanes?: int & >0 }
 	channels?: { [string]: { golden: string, provision: string } }
+	llm?: #LLMSpec
 	media?: #MediaSpec
 	report?: #ReportSpec
 	stages: [#Stage, ...#Stage]
@@ -42,3 +43,9 @@
 
 // The P1 agent runtime input (the standalone + stage op).
 #AgentRunInput: { system_prompt: string, prompt: string, skill?: [...string], tools?: [...string] }
+
+// The LLM endpoint config (authored on the pipeline entity). Resolution:
+// env overrides > the entity llm block > the built-in default (the local
+// ollama server). An empty api_key means ABSENT: the client sends NO auth
+// header (the local ollama needs none).
+#LLMSpec: { base_url?: string, model?: string, api_key?: string }
