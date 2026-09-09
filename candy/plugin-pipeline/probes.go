@@ -68,6 +68,13 @@ func runProbeV(word string, input map[string]any) (bool, string, any) {
 	case "media_gate":
 		ok, msg := probeMediaGate(input)
 		return ok, msg, nil
+	case "artifact":
+		ok, msg := probeArtifact(input)
+		return ok, msg, nil
+	case "expect_exit":
+		ok, msg := probeExpectExit(input)
+		return ok, msg, nil
+
 	case "lock_audit":
 		ok, msg := probeLockAudit(input)
 		return ok, msg, nil
@@ -113,6 +120,11 @@ func runProbe(word string, input map[string]any) (bool, string) {
 	switch word {
 	case "media_gate":
 		return probeMediaGate(input)
+
+	case "artifact":
+		return probeArtifact(input)
+	case "expect_exit":
+		return probeExpectExit(input)
 	case "lock_audit":
 		return probeLockAudit(input)
 	case "evidence_audit":
