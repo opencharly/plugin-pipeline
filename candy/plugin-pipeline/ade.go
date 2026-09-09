@@ -80,7 +80,7 @@ func adeVerdict(ctx context.Context, pr, bed, workdir string) (string, string, e
 			return "NO_VALIDATION", "ade: rendered bed missing: " + bedFile, err
 		}
 	}
-	verdict, summary, code, err := runAdeBed(ctx, pr, workdir)
+	verdict, summary, code, err := runAdeBed(ctx, pr, bed, workdir)
 	if err != nil {
 		return verdict, summary, err
 	}
