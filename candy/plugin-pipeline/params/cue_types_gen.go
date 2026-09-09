@@ -231,15 +231,13 @@ type ConfigAuditInput struct {
 }
 
 type ResolveChannelInput struct {
-	Pr int64 `json:"pr"`
+	Channel string `json:"channel"`
 
 	Channels map[string]struct {
 		Golden string `json:"golden"`
 
 		Provision string `json:"provision"`
 	} `json:"channels"`
-
-	Default string `json:"default"`
 }
 
 type EvidenceAuditInput struct {

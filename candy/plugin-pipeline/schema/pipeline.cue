@@ -54,7 +54,7 @@
 #SequencingInput:     { lanes: int, golden: string }
 #HeadFreshnessInput:  { plan_sha: string, pr: int, repo: string }
 #ConfigAuditInput:    { bed: string, pr: int }
-#ResolveChannelInput: { pr: int, channels: {[string]: { golden: string, provision: string } }, default: string }
+#ResolveChannelInput: { channel: string, channels: {[string]: { golden: string, provision: string } } }
 #EvidenceAuditInput:  { dir: string, files: [string], min: {[string]: int}, trees: [string] }
 
 // The P1 agent runtime input (the standalone + stage op).

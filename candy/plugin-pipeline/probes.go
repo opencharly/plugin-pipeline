@@ -117,16 +117,19 @@ func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any
 
 func probeResolveChannelV(input map[string]any) (bool, string, any) {
 	channels := mm(input["channels"])
-	def := s(input["default"])
-	if def == "" {
-		def = "stable"
+	// the ORACLE's chosen channel key — the config oracle decides the venue,
+	// the registry is the deterministic mapping. The env-selected default is
+	// GONE (the EVAL_CHANNEL era is over).
+	key := s(input["channel"])
+	if key == "" {
+		key = "stable"
 	}
 	if len(channels) == 0 {
 		return false, "resolve_channel: no channels registry", nil
 	}
-	entry, ok := channels[def]
+	entry, ok := channels[key]
 	if !ok {
-		return false, "resolve_channel: default not in registry: " + def, nil
+		return false, "resolve_channel: channel not in registry: " + key, nil
 	}
 	// the VALUE is the registry ENTRY (golden/provision fields), so the probe
 	// stage can expose them as outputs and the lane can render the bed's from:.
