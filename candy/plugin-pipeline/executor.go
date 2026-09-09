@@ -433,7 +433,15 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		// --var per-PR passthrough). The deterministic exit contract maps to the
 		// report verdict. (RCA: the external CLI dispatch has no reverse-channel
 		// executor - see ade.go header.)
-		verdict, summary, aerr := adeVerdict(ctx, rc.pr, rc.workdir)
+		var verdict, summary string
+		var aerr error
+		if rc.ex != nil {
+			// the compiled-in placement: drive the bed's plan in-process (no charly spawn)
+			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, rc.workdir, rc.ex)
+		} else {
+			// the un-compiled placement: the external charly check-run fallback
+			verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.workdir)
+		}
 		if aerr != nil {
 			res.Status = "fail"
 			res.Message = aerr.Error()
