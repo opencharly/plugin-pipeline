@@ -1,7 +1,6 @@
 package pluginpipeline
 
 import (
-<<<<<<< HEAD
 	"context"
 	"os"
 	"path/filepath"
@@ -89,11 +88,8 @@ func TestBlockScalar_RendersTheProse(t *testing.T) {
 	}
 	if !strings.Contains(out, "the guest must report its hostname") {
 		t.Errorf("render = %q, want the prose", out)
-=======
-	"os"
-	"path/filepath"
-	"testing"
-)
+	}
+}
 
 func TestProbeArtifact(t *testing.T) {
 	dir := t.TempDir()
@@ -133,6 +129,5 @@ func TestFindBedEntity(t *testing.T) {
 	}
 	if got := findBedEntity(dir, "check-omarchy-pr-1-vm"); got == "" {
 		t.Fatal("by-name fallback should find the bed")
->>>>>>> origin/main
 	}
 }
