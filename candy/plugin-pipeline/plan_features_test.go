@@ -84,7 +84,7 @@ func TestFixtureMode_RunsOffline(t *testing.T) {
 func TestChecksRenderAsCommandSteps(t *testing.T) {
 	tmpl := `steps:
               - check: the guest must report its hostname`
-	out := renderCheckBlock([]any{map[string]any{"what": "the guest must report its hostname", "assertion": "uname -n | grep -q ."}}, "check", tmpl)
+	out := renderCheckBlock([]any{map[string]any{"what": "the guest must report its hostname", "assertion": "uname -n | grep -q ."}}, "check", tmpl, false)
 	if !strings.Contains(out, "- check: the guest must report its hostname") {
 		t.Errorf("render = %q, want the command check step", out)
 	}
@@ -95,7 +95,7 @@ func TestChecksRenderAsCommandSteps(t *testing.T) {
 		t.Errorf("render = %q, the agent-check prose emission must be gone", out)
 	}
 	// an assertion-less check is inert — never rendered
-	out2 := renderCheckBlock([]any{map[string]any{"what": "no assertion"}}, "check", tmpl)
+	out2 := renderCheckBlock([]any{map[string]any{"what": "no assertion"}}, "check", tmpl, false)
 	if strings.Contains(out2, "no assertion") {
 		t.Errorf("render = %q, an assertion-less check must not render", out2)
 	}

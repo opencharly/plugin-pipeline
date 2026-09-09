@@ -69,6 +69,8 @@ type ReportSpec struct {
 	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
 
 	Bed_template string `json:"bed_template,omitempty"`
+
+	Control_bed_template string `json:"control_bed_template,omitempty"`
 }
 
 type Stage map[string]any
@@ -155,6 +157,8 @@ type GenerateStage struct {
 	Out string `json:"out"`
 
 	Validate string `json:"validate,omitempty"`
+
+	Negate_checks bool `json:"negate_checks,omitempty"`
 
 	Skip_when string `json:"skip_when,omitempty"`
 }
