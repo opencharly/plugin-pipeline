@@ -389,18 +389,16 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		delete(res.Outputs, "value")
 		return res, nil
 	case "ade":
-		// the org-wide ADE: evaluate the rendered bed's plan in the venue via the
-		// SDK (InvokeProvider over the single dial) + the agent-graded agent-check
-		// steps. The deterministic verdict feeds the report's frontmatter.
-		bed := rc.resolveRefs(asString(raw["bed"]))
-		if bed != "" && !filepath.IsAbs(bed) && rc.workdir != "" {
-			bed = filepath.Join(rc.workdir, bed)
-		}
-		verdict, summary, err := adeVerdict(ctx, rc.ex, bed, rc)
-		if err != nil {
+		// the org-wide ADE: run the rendered ORACLE bed through the host's compiled-in
+		// check-run ONCE (the org R10 machinery + its ADE agent-check grading + the
+		// --var per-PR passthrough). The deterministic exit contract maps to the
+		// report verdict. (RCA: the external CLI dispatch has no reverse-channel
+		// executor - see ade.go header.)
+		verdict, summary, aerr := adeVerdict(ctx, rc.pr, rc.workdir)
+		if aerr != nil {
 			res.Status = "fail"
-			res.Message = err.Error()
-			return res, err
+			res.Message = aerr.Error()
+			return res, aerr
 		}
 		if res.Outputs == nil {
 			res.Outputs = map[string]any{}
