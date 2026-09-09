@@ -24,11 +24,25 @@ type PipelineInput struct {
 		Provision string `json:"provision"`
 	} `json:"channels,omitempty"`
 
+	Llm LLMSpec `json:"llm,omitempty"`
+
 	Media MediaSpec `json:"media,omitempty"`
 
 	Report ReportSpec `json:"report,omitempty"`
 
 	Stages []Stage `json:"stages"`
+}
+
+// The LLM endpoint config (authored on the pipeline entity). Resolution:
+// env overrides > the entity llm block > the built-in default (the local
+// ollama server). An empty api_key means ABSENT: the client sends NO auth
+// header (the local ollama needs none).
+type LLMSpec struct {
+	Base_url string `json:"base_url,omitempty"`
+
+	Model string `json:"model,omitempty"`
+
+	Api_key string `json:"api_key,omitempty"`
 }
 
 type MediaSpec struct {

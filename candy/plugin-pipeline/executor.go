@@ -43,6 +43,7 @@ type runCtx struct {
 	env     map[string]string
 	ex      *sdk.Executor  // the host executor (single dial) for the ADE verb dispatch
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
+	llm     map[string]any // the entity's llm block (base_url/model/api_key)
 	media   map[string]any // the entity's media: block (files/min/dir)
 }
 
@@ -205,6 +206,7 @@ func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir st
 	}
 	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap(), ex: ex}
 	rc.report = mm(mapOf(p.Report))
+	rc.llm = mm(p.Llm)
 	rc.media = mm(p.Media)
 
 	l := newLedger()

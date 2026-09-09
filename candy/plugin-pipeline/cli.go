@@ -90,7 +90,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		}
 		tools := strings.Split(flagAfter(rest, "--tools"), ",")
 		outP := flagAfter(rest, "--out")
-		resp, err := runAgent(context.Background(), sys, prompt, tools)
+		resp, err := runAgent(context.Background(), nil, sys, prompt, tools)
 		if err != nil {
 			return 1, err
 		}

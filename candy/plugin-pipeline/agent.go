@@ -56,29 +56,50 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-func envBaseURL() string {
+// llmConfig resolves the LLM endpoint. Precedence: the ENV overrides
+// (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY - the operator layer)
+// > the entity's authored llm block (the lane-author layer) > the built-in
+// default (the LOCAL ollama server with deepseek-v4-flash:cloud). An empty
+// key means ABSENT: the client sends NO auth header (local ollama needs none).
+// llmConfig resolves the LLM endpoint. UNIFORM precedence, every layer:
+// 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
+//    - the operator layer,
+// 2. the entity's authored llm block - the lane-author layer,
+// 3. the built-in default - the LOCAL ollama server (deepseek-v4-flash:cloud).
+// An empty RESOLVED key means ABSENT: the client sends NO auth header (the
+// local ollama needs none) - a missing secret can never zero out other layers.
+func llmBaseURL(rc *runCtx) string {
 	if v := os.Getenv("EVAL_LLM_BASE_URL"); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	if v := os.Getenv("AI_REVIEW_BASE_URL"); v != "" {
-		return strings.TrimRight(v, "/")
+	if rc != nil && rc.llm != nil {
+		if v, ok := rc.llm["base_url"].(string); ok && v != "" {
+			return strings.TrimRight(v, "/")
+		}
 	}
-	return "https://openrouter.ai/api/v1"
+	return "http://localhost:11434/v1"
 }
-func envModel() string {
+func llmModel(rc *runCtx) string {
 	if v := os.Getenv("EVAL_LLM_MODEL"); v != "" {
 		return v
 	}
-	if v := os.Getenv("AI_REVIEW_MODEL"); v != "" {
-		return v
+	if rc != nil && rc.llm != nil {
+		if v, ok := rc.llm["model"].(string); ok && v != "" {
+			return v
+		}
 	}
-	return "~deepseek/deepseek-v4-flash-latest"
+	return "deepseek-v4-flash:cloud"
 }
-func envAPIKey() string {
+func llmAPIKey(rc *runCtx) string {
 	if v := os.Getenv("EVAL_LLM_API_KEY"); v != "" {
 		return v
 	}
-	return os.Getenv("AI_REVIEW_API_KEY")
+	if rc != nil && rc.llm != nil {
+		if v, ok := rc.llm["api_key"].(string); ok {
+			return v
+		}
+	}
+	return ""
 }
 func envMaxTurns() int {
 	if v := os.Getenv("EVAL_MAX_TURNS"); v != "" {
@@ -112,17 +133,19 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
-func chat(ctx context.Context, msgs []chatMsg, tools []toolSchema) (chatMsg, error) {
-	body, err := json.Marshal(chatRequest{Model: envModel(), Messages: msgs, Temperature: 0.2, Tools: tools, ToolChoice: "auto"})
+func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (chatMsg, error) {
+	body, err := json.Marshal(chatRequest{Model: llmModel(rc), Messages: msgs, Temperature: 0.2, Tools: tools, ToolChoice: "auto"})
 	if err != nil {
 		return chatMsg{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, envBaseURL()+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return chatMsg{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+envAPIKey())
+	if k := llmAPIKey(rc); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
 	req.Header.Set("HTTP-Referer", "https://github.com/opencharly/plugin-pipeline")
 	req.Header.Set("X-Title", "plugin-pipeline")
 	client := &http.Client{Timeout: 5 * time.Minute}
@@ -154,12 +177,12 @@ func truncate(s string, n int) string {
 }
 
 // runAgent — the P1 runtime (standalone CLI + the agent stage).
-func runAgent(ctx context.Context, systemPrompt, prompt string, tools []string) (string, error) {
+func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string) (string, error) {
 	sys := resolveSkills(systemPrompt) // skills appended (skills.go)
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
 	for turn := 0; turn < envMaxTurns(); turn++ {
-		msg, err := chat(ctx, msgs, toolSch)
+		msg, err := chat(ctx, rc, msgs, toolSch)
 		if err != nil {
 			return "", err
 		}
@@ -225,7 +248,7 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 		_ = os.Setenv("EVAL_MAX_TURNS", strconv.Itoa(mt))
 		defer func() { _ = os.Setenv("EVAL_MAX_TURNS", prev) }()
 	}
-	resp, err := runAgent(ctx, sys, "Run this stage per your instructions.", strList(raw["tools"]))
+	resp, err := runAgent(ctx, rc, sys, "Run this stage per your instructions.", strList(raw["tools"]))
 	if err != nil {
 		return map[string]any{}, err
 	}
