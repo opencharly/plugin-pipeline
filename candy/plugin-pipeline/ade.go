@@ -19,7 +19,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -55,17 +54,7 @@ func runAdeBed(ctx context.Context, pr, workdir string) (string, string, int, er
 			return "NO_VALIDATION", "ade: run: " + rerr.Error(), 0, rerr
 		}
 	}
-	var verdict string
-	switch code {
-	case 0:
-		verdict = "PASS"
-	case 2:
-		verdict = "FAIL"
-	case 3:
-		verdict = "NO_VALIDATION" // host prerequisite skip
-	default:
-		verdict = "NO_VALIDATION"
-	}
+	verdict := adeVerdictForExit(code)
 	return verdict, summary, code, nil
 }
 
@@ -83,4 +72,18 @@ func adeVerdict(ctx context.Context, pr, workdir string) (string, string, error)
 	return verdict, fmt.Sprintf("check-run exit %d: %s", code, summary), nil
 }
 
-var _ = strconv.Itoa
+// adeVerdictForExit maps the org check-run exit contract to the deterministic
+// report verdict: 0 PASS, 2 FAIL (checks ran + failed), 3 SKIP (a host
+// prerequisite is absent), anything else NO_VALIDATION.
+func adeVerdictForExit(code int) string {
+	switch code {
+	case 0:
+		return "PASS"
+	case 2:
+		return "FAIL"
+	case 3:
+		return "NO_VALIDATION"
+	default:
+		return "NO_VALIDATION"
+	}
+}
