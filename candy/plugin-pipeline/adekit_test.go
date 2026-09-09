@@ -31,7 +31,7 @@ func TestBedPlanOps_ExtractsTheRenderedPlan(t *testing.T) {
 	if err := os.WriteFile(bed, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ops, err := bedPlanOps(dir, "42")
+	ops, err := bedPlanOps(dir, "42", "")
 	if err != nil {
 		t.Fatal(err)
 	}
