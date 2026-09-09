@@ -1,6 +1,7 @@
 package pluginpipeline
 
 import (
+	"os/exec"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -58,8 +59,22 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	if err := os.WriteFile(out, []byte(rendered), 0o644); err != nil {
 		return err
 	}
-	if v := s(raw["validate"]); v == "report-frontmatter" {
-		return validateFrontmatter(out)
+	if v := s(raw["validate"]); v != "" {
+		if v == "report-frontmatter" {
+			return validateFrontmatter(out)
+		}
+		// GENERIC validation contract: run the authored validator as a shell
+		// command in the run workdir (the refs resolve: $pr/$calver/$workdir/
+		// $env.NAME). Non-zero exit = the stage FAILS - the rendered artifact
+		// never ships unvalidated (RCA 2026.252: the eval lane shipped
+		// placeholder beds because this contract was declared but dead).
+		cmd := rc.resolveRefs(v)
+		c := exec.Command("bash", "-c", cmd)
+		c.Dir = rc.workdir
+		c.Stdout, c.Stderr = os.Stdout, os.Stderr
+		if err := c.Run(); err != nil {
+			return errString("generate validate failed: " + err.Error())
+		}
 	}
 	return nil
 }

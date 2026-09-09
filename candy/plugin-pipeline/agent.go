@@ -61,31 +61,32 @@ type chatResponse struct {
 // > the entity's authored llm block (the lane-author layer) > the built-in
 // default (the LOCAL ollama server with deepseek-v4-flash:cloud). An empty
 // key means ABSENT: the client sends NO auth header (local ollama needs none).
+// llmConfig resolves the LLM endpoint. UNIFORM precedence, every layer:
+// 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
+//    - the operator layer,
+// 2. the entity's authored llm block - the lane-author layer,
+// 3. the built-in default - the LOCAL ollama server (deepseek-v4-flash:cloud).
+// An empty RESOLVED key means ABSENT: the client sends NO auth header (the
+// local ollama needs none) - a missing secret can never zero out other layers.
 func llmBaseURL(rc *runCtx) string {
+	if v := os.Getenv("EVAL_LLM_BASE_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
 	if rc != nil && rc.llm != nil {
 		if v, ok := rc.llm["base_url"].(string); ok && v != "" {
 			return strings.TrimRight(v, "/")
 		}
 	}
-	if v := os.Getenv("EVAL_LLM_BASE_URL"); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	if v := os.Getenv("AI_REVIEW_BASE_URL"); v != "" {
-		return strings.TrimRight(v, "/")
-	}
 	return "http://localhost:11434/v1"
 }
 func llmModel(rc *runCtx) string {
+	if v := os.Getenv("EVAL_LLM_MODEL"); v != "" {
+		return v
+	}
 	if rc != nil && rc.llm != nil {
 		if v, ok := rc.llm["model"].(string); ok && v != "" {
 			return v
 		}
-	}
-	if v := os.Getenv("EVAL_LLM_MODEL"); v != "" {
-		return v
-	}
-	if v := os.Getenv("AI_REVIEW_MODEL"); v != "" {
-		return v
 	}
 	return "deepseek-v4-flash:cloud"
 }
@@ -98,7 +99,7 @@ func llmAPIKey(rc *runCtx) string {
 			return v
 		}
 	}
-	return os.Getenv("AI_REVIEW_API_KEY")
+	return ""
 }
 func envMaxTurns() int {
 	if v := os.Getenv("EVAL_MAX_TURNS"); v != "" {
