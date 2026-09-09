@@ -77,17 +77,27 @@ func TestFixtureMode_RunsOffline(t *testing.T) {
 	}
 }
 
-// TestBlockScalar_RendersTheProse is the B12 coverage for the agent-check block
-// scalar: the render emits the prose as a folded block scalar.
-func TestBlockScalar_RendersTheProse(t *testing.T) {
+// TestChecksRenderAsCommandSteps is the B12 coverage for the deterministic
+// command-check rendering (the agent-check prose emission is GONE — hard
+// cutover, R5): each check renders as check: + id: + command: and EXECUTES in
+// the venue. A check without an assertion is inert and never rendered.
+func TestChecksRenderAsCommandSteps(t *testing.T) {
 	tmpl := `steps:
-              - agent-check: >-`
-	out := renderCheckBlock([]any{map[string]any{"what": "the guest must report its hostname"}}, "agent-check", tmpl)
-	if !strings.Contains(out, "agent-check: >-") {
-		t.Errorf("render = %q, want the agent-check block scalar", out)
+              - check: the guest must report its hostname`
+	out := renderCheckBlock([]any{map[string]any{"what": "the guest must report its hostname", "assertion": "uname -n | grep -q ."}}, "check", tmpl)
+	if !strings.Contains(out, "- check: the guest must report its hostname") {
+		t.Errorf("render = %q, want the command check step", out)
 	}
-	if !strings.Contains(out, "the guest must report its hostname") {
-		t.Errorf("render = %q, want the prose", out)
+	if !strings.Contains(out, "command: 'uname -n | grep -q .'") {
+		t.Errorf("render = %q, want the deterministic command", out)
+	}
+	if strings.Contains(out, "agent-check") || strings.Contains(out, "verify with") {
+		t.Errorf("render = %q, the agent-check prose emission must be gone", out)
+	}
+	// an assertion-less check is inert — never rendered
+	out2 := renderCheckBlock([]any{map[string]any{"what": "no assertion"}}, "check", tmpl)
+	if strings.Contains(out2, "no assertion") {
+		t.Errorf("render = %q, an assertion-less check must not render", out2)
 	}
 }
 

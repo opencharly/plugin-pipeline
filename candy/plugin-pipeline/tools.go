@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/opencharly/plugin-gh/candy/plugin-gh/gh"
+	"gopkg.in/yaml.v3"
 )
 
 // tools.go — the agent tool catalog. Tools are capability REFERENCES declared per
@@ -58,10 +59,8 @@ var toolCatalog = map[string][]toolSchema{
 	},
 	"ledger": {
 		fnArgs("stage_output", "Read a prior stage output from THIS RUN's ledger.", map[string]any{"stage": map[string]any{"type": "string", "description": "the stage id (e.g. triage, eval)"}}, []string{"stage"}),
-		fnArgs("read_summary", "Read a run summary.yml from the evidence tree (paths under .check/... or media/...).", map[string]any{"path": map[string]any{"type": "string", "description": "the evidence-relative path"}}, []string{"path"}),
-	},
-	"read": {
-		fn("read_file", "Read a file from the evidence/media dirs."),
+		fnArgs("run_outcomes", "The structured step outcomes of a bed's LATEST check run: every step's id, name, ok/fail/skip, and the run verdict. The tool resolves the latest run dir itself — never guess paths.", map[string]any{"bed": map[string]any{"type": "string", "description": "the bed entity name (e.g. check-omarchy-pr-10115-vm)"}}, []string{"bed"}),
+		fn("ledger_facts", "The structured ledger facts of THIS run: every prior stage's outputs (the triage plan, the eval verdict + summary, the control result)."),
 	},
 }
 
@@ -105,12 +104,12 @@ func dispatchTool(name, arguments string, rc *runCtx) string {
 			return toolFail(msg)
 		}
 		return jsonStr(map[string]string{"status": "pass"})
-	case "read_file":
-		return readFileTool(arguments)
 	case "stage_output":
 		return stageOutputTool(arguments, rc)
-	case "read_summary":
-		return readSummaryTool(arguments, rc)
+	case "run_outcomes":
+		return runOutcomesTool(arguments, rc)
+	case "ledger_facts":
+		return ledgerFactsTool(rc)
 	}
 	return jsonStr(map[string]string{"error": "unknown tool"})
 }
@@ -218,37 +217,62 @@ func stageOutputTool(arguments string, rc *runCtx) string {
 	return jsonStr(r.Outputs)
 }
 
-// readSummaryTool: read the evidence tree (the run summaries) — rooted under
-// the run workdir, never arbitrary traversal.
-func readSummaryTool(arguments string, rc *runCtx) string {
+// runOutcomesTool: the structured step outcomes of a bed's LATEST check run.
+// The tool resolves the latest calver dir itself (.check/<bed>/<calver>/) —
+// the agent NEVER guesses paths (the 952-failure era is gone).
+func runOutcomesTool(arguments string, rc *runCtx) string {
 	var in struct {
-		Path string `json:"path"`
+		Bed string `json:"bed"`
 	}
 	_ = json.Unmarshal([]byte(arguments), &in)
-	if in.Path == "" || strings.Contains(in.Path, "..") {
-		return jsonStr(map[string]string{"error": "path required and must not traverse"})
+	if in.Bed == "" {
+		return jsonStr(map[string]string{"error": "bed required"})
 	}
-	p := in.Path
-	if rc != nil && rc.workdir != "" && !filepath.IsAbs(p) {
-		p = filepath.Join(rc.workdir, p)
+	base := filepath.Join(rc.workdir, ".check", in.Bed)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return jsonStr(map[string]string{"error": "no check runs for bed " + in.Bed + ": " + err.Error()})
 	}
-	b, err := os.ReadFile(filepath.Clean(p))
+	// the latest calver dir (the run stamp sorts lexically: YYYY.DDD.HHMM).
+	latest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return jsonStr(map[string]string{"error": "no run dirs for bed " + in.Bed})
+	}
+	summaryPath := filepath.Join(base, latest, "summary.yml")
+	b, err := os.ReadFile(summaryPath)
 	if err != nil {
 		return jsonStr(map[string]string{"error": "read failed: " + err.Error()})
 	}
-	return string(b)
+	var sum struct {
+		Steps []struct {
+			Name string `yaml:"name"`
+			OK   bool   `yaml:"ok"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(b, &sum); err != nil {
+		return jsonStr(map[string]string{"error": "summary parse failed: " + err.Error()})
+	}
+	steps := make([]map[string]any, 0, len(sum.Steps))
+	for _, st := range sum.Steps {
+		status := "fail"
+		if st.OK {
+			status = "ok"
+		}
+		steps = append(steps, map[string]any{"name": st.Name, "status": status})
+	}
+	return jsonStr(map[string]any{"bed": in.Bed, "calver": latest, "steps": steps})
 }
 
-func readFileTool(arguments string) string {
-	var in map[string]any
-	_ = json.Unmarshal([]byte(arguments), &in)
-	path, _ := in["path"].(string)
-	if path == "" || strings.Contains(path, "..") {
-		return jsonStr(map[string]string{"error": "path required and must not traverse"})
+// ledgerFactsTool: the structured ledger facts of THIS run — the agent's
+// context injection, on demand.
+func ledgerFactsTool(rc *runCtx) string {
+	if rc == nil || rc.ledger == nil {
+		return jsonStr(map[string]string{"error": "no ledger"})
 	}
-	b, err := os.ReadFile(filepath.Clean(path))
-	if err != nil {
-		return jsonStr(map[string]string{"error": "read failed"})
-	}
-	return string(b)
+	return jsonStr(map[string]string{"facts": rc.ledger.facts()})
 }

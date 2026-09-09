@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -192,7 +193,7 @@ func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tool
 // runAgentTurns: the runtime with an EXPLICIT turn cap (0 = the env default) —
 // never a per-stage os.Setenv (process-global, raced the batch lanes).
 func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string, stageMaxTurns int) (string, error) {
-	sys := resolveSkills(systemPrompt) // skills appended (skills.go)
+	sys := systemPrompt // skills are resolved in runAgentStage against the entity's corpus (skills.go is deleted)
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
 	maxTurns := stageMaxTurns
@@ -227,9 +228,21 @@ func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string,
 			}
 			return "[budget exhausted: the agent spent its " + strconv.Itoa(maxTurns) + " turns on tool calls without a prose verdict — grading from the evidence packet is partial; the check-run results remain authoritative]", nil
 		}
+		// the read-failure circuit breaker: N consecutive tool failures abort
+		// the stage informatively — the 0/0/0/0 path-guessing spirals are gone
+		// (RCA 2026.252.2250: 952 failed reads burned the report agents' turns).
+		consecutiveFails := 0
 		for _, tc := range msg.ToolCalls {
 			res := dispatchTool(tc.Function.Name, tc.Function.Arguments, rc)
 			fmt.Printf("[tool] %s(%s) -> %.200s\n", tc.Function.Name, tc.Function.Arguments, res)
+			if strings.Contains(res, "\"error\"") {
+				consecutiveFails++
+				if consecutiveFails >= 5 {
+					return "", fmt.Errorf("agent: %d consecutive tool failures (last: %s) — the evidence seam is broken; aborting instead of spiraling", consecutiveFails, tc.Function.Name)
+				}
+			} else {
+				consecutiveFails = 0
+			}
 			msgs = append(msgs, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: &res})
 		}
 	}
@@ -250,12 +263,36 @@ func lastVerdict(msgs []chatMsg) string {
 	return ""
 }
 
-// runAgentStage: the plan agent stage.
+// runAgentStage: the plan agent stage. The stage's prompt is the SYSTEM
+// message; the USER message carries the stage id + the structured ledger facts
+// (the prior stage outputs — the agent never has to guess the evidence layout
+// to know what happened). The declared skill: refs are SKILL NAMES resolved
+// against the entity's skills.corpus; an unresolvable ref FAILS the stage
+// informatively (the decorative-ref era is gone). The reply is decoded by the
+// TYPED decoder against the declared outputs — a contract violation fails the
+// stage with the exact field + expected type (the redo signal is informed).
 func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledger) (map[string]any, error) {
 	id := asString(raw["id"])
 	sys := asString(raw["prompt"])
 	if rc != nil {
 		sys = rc.resolveRefs(sys)
+	}
+	// skills: resolve the stage's skill: refs against the entity's corpus.
+	// A declared skill that does not resolve is a LANE DEFECT — the stage
+	// fails informatively instead of running the agent unskilled.
+	if rc != nil {
+		corpus := s(rc.skills["corpus"])
+		if corpus != "" && !filepath.IsAbs(corpus) && rc.workdir != "" {
+			corpus = filepath.Join(rc.workdir, corpus)
+		}
+		for _, name := range strList(raw["skill"]) {
+			p := filepath.Join(corpus, name, "SKILL.md")
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return map[string]any{}, fmt.Errorf("agent stage %s: skill %q not found in the corpus at %s (declared skill: refs must resolve — the decorative-ref era is gone)", id, name, corpus)
+			}
+			sys += "\n\n--- " + name + " ---\n" + string(b)
+		}
 	}
 	// stage-level turn cap (raw max_turns) overrides the env default; the
 	// stage prompt can then enforce the model's own termination.
@@ -263,9 +300,13 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	if raw != nil {
 		mt = intValue(raw["max_turns"])
 	}
-	// the stage turn cap rides the call — os.Setenv here was PROCESS-GLOBAL and
-	// raced the concurrent batch lanes (RCA 2026.252.2210).
-	resp, err := runAgentTurns(ctx, rc, sys, "Run this stage per your instructions.", strList(raw["tools"]), mt)
+	// the user message: the stage id + the structured ledger facts — the agent
+	// narrates from facts, never from path-guessing archaeology.
+	user := "Run this stage per your instructions.\n\nStage: " + id
+	if rc != nil && rc.ledger != nil {
+		user += "\n\nLedger facts (the prior stage outputs of THIS run):\n" + rc.ledger.facts()
+	}
+	resp, err := runAgentTurns(ctx, rc, sys, user, strList(raw["tools"]), mt)
 	if err != nil {
 		return map[string]any{}, err
 	}
@@ -274,10 +315,121 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	// surfaced only as downstream empty renders, with nothing to inspect).
 	fmt.Printf("[agent %s] response: %.400s\n", id, resp)
 	out := map[string]any{"response": resp}
-	for _, name := range strList(raw["outputs"]) {
-		out[name] = extractJSON(resp, name)
+	// the TYPED decode: each declared output is validated against its
+	// #OutputType; a violation fails the stage with the exact field.
+	declared, _ := raw["outputs"].(map[string]any)
+	for name, spec := range declared {
+		val, err := decodeTypedOutput(resp, name, spec)
+		if err != nil {
+			return map[string]any{}, fmt.Errorf("agent stage %s: output %q: %w", id, name, err)
+		}
+		out[name] = val
 	}
 	return out, nil
+}
+
+// decodeTypedOutput: extract one declared output from the agent's reply (ONE
+// JSON object, fence-tolerant) and validate it against the #OutputType spec.
+// The quote-unaware extractJSON scanner is GONE — this is the one canonical
+// decoder (R3).
+func decodeTypedOutput(resp, name string, spec any) (any, error) {
+	obj, err := parseReplyObject(resp)
+	if err != nil {
+		return nil, fmt.Errorf("the reply is not a single JSON object: %w", err)
+	}
+	val, ok := obj[name]
+	if !ok {
+		return nil, fmt.Errorf("the reply has no %q field (the declared output contract)", name)
+	}
+	m, _ := spec.(map[string]any)
+	typ := s(m["type"])
+	if typ == "" {
+		typ = "string"
+	}
+	switch typ {
+	case "string":
+		if _, ok := val.(string); !ok {
+			return nil, fmt.Errorf("expected a string, got %T", val)
+		}
+		return val, nil
+	case "int":
+		switch v := val.(type) {
+		case float64:
+			return int(v), nil
+		case string:
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("expected an int, got %q", v)
+			}
+			return n, nil
+		default:
+			return nil, fmt.Errorf("expected an int, got %T", val)
+		}
+	case "bool":
+		if _, ok := val.(bool); !ok {
+			return nil, fmt.Errorf("expected a bool, got %T", val)
+		}
+		return val, nil
+	case "enum":
+		vs, _ := val.(string)
+		allowed := strList(m["enum"])
+		for _, a := range allowed {
+			if vs == a {
+				return vs, nil
+			}
+		}
+		return nil, fmt.Errorf("expected one of %v, got %q", allowed, vs)
+	case "string_list":
+		arr, ok := val.([]any)
+		if !ok {
+			return nil, fmt.Errorf("expected a list of strings, got %T", val)
+		}
+		out := make([]string, 0, len(arr))
+		for _, e := range arr {
+			es, ok := e.(string)
+			if !ok {
+				return nil, fmt.Errorf("expected a list of strings, got a %T element", e)
+			}
+			out = append(out, es)
+		}
+		return out, nil
+	case "object":
+		// any JSON object/array — validated as parseable JSON (the checks[],
+		// the plan-json map, the nested structures).
+		return val, nil
+	default:
+		return nil, fmt.Errorf("unknown output type %q", typ)
+	}
+}
+
+// parseReplyObject: the reply is ONE JSON object; a fence-tolerant parse
+// (the model may wrap the object in prose or fences — the object is the
+// contract, the prose is noise).
+func parseReplyObject(resp string) (map[string]any, error) {
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(resp), &obj); err == nil {
+		return obj, nil
+	}
+	start := strings.Index(resp, "{")
+	if start < 0 {
+		return nil, fmt.Errorf("no JSON object found in the reply")
+	}
+	depth := 0
+	for i := start; i < len(resp); i++ {
+		switch resp[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				if json.Unmarshal([]byte(resp[start:i+1]), &obj) == nil {
+					return obj, nil
+				}
+				return nil, fmt.Errorf("the reply's JSON object does not parse")
+			}
+		}
+	}
+	return nil, fmt.Errorf("unterminated JSON object in the reply")
 }
 
 // extractJSON: pull "key": value from a JSON-ish agent response.

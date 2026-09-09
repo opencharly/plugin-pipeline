@@ -15,10 +15,25 @@
 	llm?: #LLMSpec
 	media?: #MediaSpec
 	report?: #ReportSpec
+	// skills: the agent-stage skill corpus. corpus is a workdir-relative dir
+	// holding <skill-name>/SKILL.md; every stage skill: ref names a skill in
+	// this corpus. An unresolvable ref FAILS the stage informatively — the
+	// decorative-ref era is gone.
+	skills?: { corpus: string }
 	stages: [#Stage, ...#Stage]
 }
 #Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string }
+// #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
+// cutover). Each declared output is a field name -> #OutputType; the runner
+// renders the contract into the prompt mechanically and validates the reply
+// against it at decode. skill: refs are SKILL NAMES in the entity's
+// skills.corpus.
+#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: { [string]: #OutputType }, max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string }
+#OutputType: {
+	type: "string" | "int" | "bool" | "enum" | "string_list" | "object"
+	enum?: [...string]      // type: "enum" — the allowed values
+	description?: string    // rendered into the prompt contract
+}
 #ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec, skip_when?: string }
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's

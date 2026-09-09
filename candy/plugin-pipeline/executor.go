@@ -47,6 +47,7 @@ type runCtx struct {
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
 	llm     map[string]any // the entity's llm block (base_url/model/api_key)
 	media   map[string]any // the entity's media: block (files/min/dir)
+	skills  map[string]any // the entity's skills: block (corpus) — the agent-stage skill corpus
 }
 
 // StageResult is one ledger row.
@@ -72,6 +73,35 @@ func (l *ledger) put(r *StageResult) {
 		l.order = append(l.order, r.ID)
 	}
 	l.results[r.ID] = r
+}
+
+// facts: the structured ledger facts for the agent user-message injection —
+// every prior stage's outputs rendered compactly. The agent narrates from
+// facts; it never has to guess the evidence layout to know what happened.
+func (l *ledger) facts() string {
+	if l == nil {
+		return "(no ledger)"
+	}
+	var sb strings.Builder
+	for _, id := range l.order {
+		r := l.results[id]
+		if r == nil {
+			continue
+		}
+		sb.WriteString("- " + id + " [" + r.Kind + " " + r.Status + "]")
+		if r.Message != "" {
+			sb.WriteString(": " + truncate(r.Message, 300))
+		}
+		sb.WriteString("\n")
+		for k, v := range r.Outputs {
+			if k == "response" {
+				continue
+			}
+			b, _ := json.Marshal(v)
+			sb.WriteString("    " + k + " = " + truncate(string(b), 400) + "\n")
+		}
+	}
+	return sb.String()
 }
 
 // ---- the reference grammar ----------------------------------------------
@@ -227,6 +257,7 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	rc.report = mm(mapOf(p.Report))
 	rc.llm = mm(p.Llm)
 	rc.media = mm(p.Media)
+	rc.skills = mm(mapOf(p.Skills))
 
 	maxRedo := int(p.Redo.Max)
 	if maxRedo <= 0 {
