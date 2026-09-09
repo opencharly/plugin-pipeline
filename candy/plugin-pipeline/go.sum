@@ -60,8 +60,8 @@ github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQ
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
 github.com/oklog/run v1.1.0 h1:GEenZ1cK0+q0+wsJew9qUg/DyD8k3JzYsZAi5gYi2mA=
 github.com/oklog/run v1.1.0/go.mod h1:sVPdnTZT1zYwAJeCMu2Th4T21pA3FPOQRfWjQlk7DVU=
-github.com/opencharly/sdk v0.2026251.531 h1:e4WfC2mh+wg4S89CkYI+eItkToZm9zzXA0SxXHN1b9o=
-github.com/opencharly/sdk v0.2026251.531/go.mod h1:bHkz9iCZVrpRQ1GjmsqnnOZYkk6bidLqzmikJivJbrU=
+github.com/opencharly/plugin-gh v0.2026252.1501 h1:/MgnBLG5HbDJr7LYbKNdjISn1IDYalcMSBDGpu6ZTow=
+github.com/opencharly/plugin-gh v0.2026252.1501/go.mod h1:9IQqfFmsd/8yv3/gnUhZxT9Zx9BJT5TmGG8uHz/rr5w=
 github.com/opencharly/sdk v0.2026252.819 h1:gF700Z7Qj5TtWnqDEa8dNOQ7AKF/foPjVUpnwBQT/aA=
 github.com/opencharly/sdk v0.2026252.819/go.mod h1:bHkz9iCZVrpRQ1GjmsqnnOZYkk6bidLqzmikJivJbrU=
 github.com/opencharly/spec v0.2026250.2036 h1:szPuKqRRzkGQcoM4NbSS7oJ6iHd3790EODsPzb0RASY=

@@ -307,28 +307,31 @@ func extractJSON(resp, key string) any {
 		}
 		return resp
 	}
-	idx := strings.Index(resp, "\""+key+"\"")
-	if idx < 0 {
-		return resp
+	// a REAL object parse: the response is ONE JSON object (the stage
+	// contract); scanning for the key was quote-unaware and truncated any
+	// value containing a comma (the report/cold-read prose — RCA 2026.252.2250).
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(resp), &obj); err == nil {
+		return obj[key]
 	}
-	rest := resp[idx+len("\""+key+"\""):]
-	rest = strings.TrimLeft(rest, " :")
-	depth := 0
-	for i, r := range rest {
-		switch r {
-		case '{', '[':
-			depth++
-		case '}', ']':
-			depth--
-		case ',', '\n':
-			if depth == 0 {
-				var v any
-				_ = json.Unmarshal([]byte(rest[:i]), &v)
-				return v
+	// tolerant fallback: the response may carry fence prose around the object
+	start := strings.Index(resp, "{")
+	if start >= 0 {
+		depth := 0
+		for i := start; i < len(resp); i++ {
+			switch resp[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					if json.Unmarshal([]byte(resp[start:i+1]), &obj) == nil {
+						return obj[key]
+					}
+					return nil
+				}
 			}
 		}
 	}
-	var v any
-	_ = json.Unmarshal([]byte(rest), &v)
-	return v
+	return nil
 }

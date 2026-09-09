@@ -412,7 +412,7 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 				res.Outputs[v] = "pass"
 				continue
 			}
-			ok, msg, val := runProbeV(v, verbInput)
+			ok, msg, val := runProbeV(v, verbInput, rc)
 			if !ok {
 				res.Status = "fail"
 				res.Message = msg
