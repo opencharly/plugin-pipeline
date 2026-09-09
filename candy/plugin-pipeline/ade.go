@@ -25,13 +25,16 @@ import (
 // runAdeBed invokes the org's check-run for the rendered bed and maps its exit
 // contract to the deterministic verdict (0 PASS, 2 FAIL, 3 SKIP, else
 // NO_VALIDATION).
-func runAdeBed(ctx context.Context, pr, workdir string) (string, string, int, error) {
+func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, int, error) {
 	charlyBin := os.Getenv("CHARLY_BIN")
 	if charlyBin == "" {
 		charlyBin = "charly"
 	}
+	if bed == "" {
+		bed = "check-omarchy-pr-" + pr + "-vm"
+	}
 	args := []string{
-		"check", "run", "check-omarchy-pr-" + pr + "-vm",
+		"check", "run", bed,
 		"--var", "PR_NUMBER=" + pr,
 		"--var", "PR_HEAD_SHA=" + os.Getenv("PR_HEAD_SHA"),
 		"--keep-venue",
@@ -60,12 +63,18 @@ func runAdeBed(ctx context.Context, pr, workdir string) (string, string, int, er
 
 // adeVerdict resolves the rendered bed for the lane's PR and runs the org
 // check-run; returns the deterministic verdict + the run summary.
-func adeVerdict(ctx context.Context, pr, workdir string) (string, string, error) {
+func adeVerdict(ctx context.Context, pr, bed, workdir string) (string, string, error) {
+	if bed == "" {
+		bed = "check-omarchy-pr-" + pr + "-vm"
+	}
 	bedFile := filepath.Join(workdir, "pr-beds", "pr-"+pr, "charly.yml")
+	if strings.HasSuffix(bed, "-control") {
+		bedFile = filepath.Join(workdir, "pr-beds", "pr-"+pr+"-control", "charly.yml")
+	}
 	if _, err := os.Stat(bedFile); err != nil {
 		// the by-name fallback (plan §2.1): resolve ANY existing check-bed entity
 		// from the project's discovered files (the imports' check-bed entities).
-		if found := findBedEntity(workdir, "check-omarchy-pr-"+pr+"-vm"); found != "" {
+		if found := findBedEntity(workdir, bed); found != "" {
 			bedFile = found
 		} else {
 			return "NO_VALIDATION", "ade: rendered bed missing: " + bedFile, err

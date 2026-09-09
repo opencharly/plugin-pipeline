@@ -521,12 +521,15 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		// executor - see ade.go header.)
 		var verdict, summary string
 		var aerr error
+		// the DECLARED bed (resolved) — the control bed runs the same ADE
+		// machinery on its own entity; the hardcoded -vm name is gone.
+		bed := rc.resolveRefs(asString(raw["bed"]))
 		if rc.ex != nil {
 			// the compiled-in placement: drive the bed's plan in-process (no charly spawn)
-			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, rc.workdir, rc.ex)
+			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, bed, rc.workdir, rc.ex)
 		} else {
 			// the un-compiled placement: the external charly check-run fallback
-			verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.workdir)
+			verdict, summary, aerr = adeVerdict(ctx, rc.pr, bed, rc.workdir)
 		}
 		if aerr != nil {
 			res.Status = "fail"
