@@ -344,22 +344,22 @@ func asString(v any) string {
 
 func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]any, l *ledger) (*StageResult, error) {
 	res := &StageResult{ID: id, Kind: kind, Status: "ok"}
+	// skip_when: a stage-level condition (e.g. "@eval.verdict == FAIL") that
+	// records the stage as skipped instead of failing - the report still
+	// renders for a FAILED eval (the media gate is only meaningful on a
+	// passing run). Applies to every stage kind that declares it.
+	if sw := asString(raw["skip_when"]); sw != "" {
+		if rc.evalCond(sw) {
+			res.Status = "skipped"
+			res.Message = "skipped: " + sw
+			return res, nil
+		}
+	}
 	switch kind {
 	case "agent":
 		out, err := runAgentStage(ctx, rc, raw, l)
 		res.Outputs = out
 		return res, err
-		// skip_when: a stage-level condition (e.g. "@eval.verdict == FAIL") that
-		// records the stage as skipped instead of failing - the report still
-		// renders for a FAILED eval (the media gate is only meaningful on a
-		// passing run).
-		if sw := asString(raw["skip_when"]); sw != "" {
-			if rc.evalCond(sw) {
-				res.Status = "skipped"
-				res.Message = "skipped: " + sw
-				return res, nil
-			}
-		}
 	case "probe":
 		verbs := strList(raw["verbs"])
 		input := rc.resolveValue(anyMap(raw["input"]))
