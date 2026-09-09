@@ -65,6 +65,8 @@ type AgentStage struct {
 	Max_turns int64 `json:"max_turns,omitempty"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type RedoSpec struct {
@@ -85,6 +87,8 @@ type ProbeStage struct {
 	Outputs []string `json:"outputs,omitempty"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
@@ -98,6 +102,8 @@ type AdeStage struct {
 	Bed string `json:"bed"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type GenerateStage struct {
@@ -112,6 +118,8 @@ type GenerateStage struct {
 	Out string `json:"out"`
 
 	Validate string `json:"validate,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type MediaStage struct {
@@ -122,6 +130,8 @@ type MediaStage struct {
 	Assemble bool `json:"assemble"`
 
 	Transcode string `json:"transcode,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type GateStage struct {
