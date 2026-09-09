@@ -445,6 +445,12 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 	case "agent":
 		out, err := runAgentStage(ctx, rc, raw, l)
 		res.Outputs = out
+		if re, ok := err.(*redoError); ok {
+			res.Status = "fail"
+			res.Trigger = re.trigger
+			res.Message = re.msg
+			return res, nil
+		}
 		return res, err
 	case "probe":
 		verbs := strList(raw["verbs"])

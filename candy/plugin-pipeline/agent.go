@@ -316,17 +316,29 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	fmt.Printf("[agent %s] response: %.400s\n", id, resp)
 	out := map[string]any{"response": resp}
 	// the TYPED decode: each declared output is validated against its
-	// #OutputType; a violation fails the stage with the exact field.
+	// #OutputType; a violation is the INFORMED REDO signal — the stage fails
+	// with the redo-plan trigger (the violation message lands in the ledger
+	// facts, so the retried agent sees exactly what was wrong), never a
+	// fail-hard and never a silent pass.
 	declared, _ := raw["outputs"].(map[string]any)
 	for name, spec := range declared {
 		val, err := decodeTypedOutput(resp, name, spec)
 		if err != nil {
-			return map[string]any{}, fmt.Errorf("agent stage %s: output %q: %w", id, name, err)
+			return map[string]any{}, &redoError{trigger: "redo-plan", msg: fmt.Sprintf("output %q: %v", name, err)}
 		}
 		out[name] = val
 	}
 	return out, nil
 }
+
+// redoError: the informed-redo sentinel — a stage returns it to fail with a
+// redo trigger instead of fail-harding the lane.
+type redoError struct {
+	trigger string
+	msg     string
+}
+
+func (e *redoError) Error() string { return e.msg }
 
 // decodeTypedOutput: extract one declared output from the agent's reply (ONE
 // JSON object, fence-tolerant) and validate it against the #OutputType spec.
