@@ -156,6 +156,8 @@ type GateStage struct {
 	Id string `json:"id"`
 
 	Condition string `json:"condition"`
+
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type CommandStage struct {
