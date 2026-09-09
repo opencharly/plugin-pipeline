@@ -62,6 +62,8 @@ type AgentStage struct {
 
 	Outputs []string `json:"outputs,omitempty"`
 
+	Max_turns int64 `json:"max_turns,omitempty"`
+
 	Redo RedoSpec `json:"redo,omitempty"`
 }
 
