@@ -14,9 +14,8 @@ import (
 // a stage declaring skip_when evaluates the condition and records skipped
 // instead of failing (the media gate is only meaningful on a passing run).
 func TestSkipWhen_RecordsSkipped(t *testing.T) {
-	rc := &runCtx{pr: "1", calver: "2026.1.1", env: map[string]string{}}
 	l := newLedger()
-	curLedger = l
+	rc := &runCtx{pr: "1", calver: "2026.1.1", env: map[string]string{}, ledger: l}
 	// the eval stage already ran: its verdict is in the ledger
 	l.put(&StageResult{ID: "eval", Kind: "eval", Status: "ok", Outputs: map[string]any{"verdict": "FAIL"}})
 	res, err := rc.runStage(nil, "media", "media-gate", map[string]any{
@@ -65,10 +64,11 @@ func TestFixtureMode_RunsOffline(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "beds", "x.yml"), []byte("plan: []"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := runPlan(context.Background(), p, "1", "2026.1.1", dir, nil); err != nil {
+	l := newLedger()
+	if err := runPlanL(context.Background(), p, "1", "2026.1.1", dir, nil, l); err != nil {
 		t.Fatal(err)
 	}
-	res, ok := ledgerRef("p1")
+	res, ok := l.results["p1"]
 	if !ok {
 		t.Fatal("p1 stage missing from the ledger")
 	}

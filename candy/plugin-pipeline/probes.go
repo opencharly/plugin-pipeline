@@ -65,13 +65,13 @@ func mm(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 // runProbeV returns (ok, message, value) — the value powers probe stage outputs
 // (e.g. resolve_channel returns the resolved channel).
-func runProbeV(word string, input map[string]any) (bool, string, any) {
+func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any) {
 	if input == nil {
 		input = map[string]any{}
 	}
 	switch word {
 	case "media_gate":
-		ok, msg := probeMediaGate(input)
+		ok, msg := probeMediaGate(input, rc)
 		return ok, msg, nil
 	case "artifact":
 		ok, msg := probeArtifact(input)
@@ -84,20 +84,31 @@ func runProbeV(word string, input map[string]any) (bool, string, any) {
 		ok, msg := probeLockAudit(input)
 		return ok, msg, nil
 	case "evidence_audit":
-		if ok, msg := probeMediaGate(input); !ok {
+		if ok, msg := probeMediaGate(input, rc); !ok {
 			return ok, msg, nil
 		}
 		ok, msg := probeLockAudit(input)
 		return ok, msg, nil
-	case "golden_present", "head_freshness", "sequencing", "lanes_ok", "config_audit":
-		ok, msg := runProbe(word, input)
+	case "golden_present":
+		ok, msg := probeGoldenPresent(input)
+		return ok, msg, nil
+	case "head_freshness":
+		ok, msg := probeHeadFreshness(input)
+		return ok, msg, nil
+	case "lanes_ok":
+		ok, msg := probeSequencing(input)
+		return ok, msg, nil
+	case "sequencing":
+		ok, msg := probeSequencing(input)
+		return ok, msg, nil
+	case "config_audit":
+		ok, msg := probeConfigAudit(input)
 		return ok, msg, nil
 	case "resolve_channel":
 		ok, msg, ch := probeResolveChannelV(input)
 		return ok, msg, ch
 	}
-	ok, msg := runProbe(word, input)
-	return ok, msg, nil
+	return false, "unknown probe " + word, nil
 }
 
 func probeResolveChannelV(input map[string]any) (bool, string, any) {
@@ -118,50 +129,23 @@ func probeResolveChannelV(input map[string]any) (bool, string, any) {
 	return true, "", entry
 }
 
+// runProbe: the legacy/CLI wrapper — no run context, the env fallback only.
 func runProbe(word string, input map[string]any) (bool, string) {
-	if input == nil {
-		input = map[string]any{}
-	}
-	switch word {
-	case "media_gate":
-		return probeMediaGate(input)
-
-	case "artifact":
-		return probeArtifact(input)
-	case "expect_exit":
-		return probeExpectExit(input)
-	case "lock_audit":
-		return probeLockAudit(input)
-	case "evidence_audit":
-		if ok, msg := probeMediaGate(input); !ok {
-			return ok, msg
-		}
-		return probeLockAudit(input)
-	case "golden_present":
-		return probeGoldenPresent(input)
-	case "head_freshness":
-		return probeHeadFreshness(input)
-	case "lanes_ok", "sequencing":
-		return probeSequencing(input)
-	case "resolve_channel":
-		return probeResolveChannel(input)
-	case "config_audit":
-		return probeConfigAudit(input)
-
-	}
-	return false, "unknown probe " + word
+	ok, msg, _ := runProbeV(word, input, nil)
+	return ok, msg
 }
 
-func probeMediaGate(input map[string]any) (bool, string) {
+func probeMediaGate(input map[string]any, rc *runCtx) (bool, string) {
 	dir := s(input["dir"])
 	files := ss(input["files"])
 	min := mm(input["min"])
+	_ = rc
 	if dir == "" || len(files) == 0 {
 		return false, "media_gate: dir + files required"
 	}
 	for _, f := range files {
 		// accept both pr-<pr>.<ext> (the media stage naming) and the bare <ext>
-		cands := []string{filepath.Join(dir, "pr-"+prN()+"."+f), filepath.Join(dir, f)}
+		cands := []string{filepath.Join(dir, "pr-"+prN(rc)+"."+f), filepath.Join(dir, f)}
 		ok := false
 		for _, p := range cands {
 			if st, err := os.Stat(p); err == nil {
@@ -179,8 +163,14 @@ func probeMediaGate(input map[string]any) (bool, string) {
 	return true, ""
 }
 
-// prN: the current run's pr for the media naming (set by runPlan via rc).
-func prN() string {
+// prN: the current run's pr for the media naming — the RUN CONTEXT first
+// (the probe layer's member of the RCA 2026.252.2210 env-race class: the
+// env fell back to the batch process-global, so the media gate checked
+// pr-<env>.<ext> instead of pr-<lane>.<ext>), the env only for CLI/legacy.
+func prN(rc *runCtx) string {
+	if rc != nil && rc.pr != "" {
+		return rc.pr
+	}
 	if p := os.Getenv("EVAL_PR_NUMBER"); p != "" {
 		return p
 	}

@@ -6,6 +6,8 @@ package params
 type PipelineInput struct {
 	Version int64 `json:"version,omitempty"`
 
+	Repo string `json:"repo,omitempty"`
+
 	Gates []string `json:"gates,omitempty"`
 
 	Redo struct {

@@ -63,7 +63,8 @@ type chatResponse struct {
 // key means ABSENT: the client sends NO auth header (local ollama needs none).
 // llmConfig resolves the LLM endpoint. UNIFORM precedence, every layer:
 // 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
-//    - the operator layer,
+//   - the operator layer,
+//
 // 2. the entity's authored llm block - the lane-author layer,
 // 3. the built-in default - the LOCAL ollama server (deepseek-v4-flash:cloud).
 // An empty RESOLVED key means ABSENT: the client sends NO auth header (the
@@ -166,6 +167,12 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 		return chatMsg{}, fmt.Errorf("LLM: no choices")
 	}
 	m := cr.Choices[0].Message
+	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string {
+		if m.Content != nil {
+			return *m.Content
+		}
+		return ""
+	}(), 120), len(m.ToolCalls))
 	return chatMsg{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls}, nil
 }
 
@@ -176,12 +183,23 @@ func truncate(s string, n int) string {
 	return s[:n] + "..."
 }
 
-// runAgent — the P1 runtime (standalone CLI + the agent stage).
+// runAgent — the P1 runtime (standalone CLI + the agent stage); the turn cap
+// from the env (the CLI default).
 func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string) (string, error) {
+	return runAgentTurns(ctx, rc, systemPrompt, prompt, tools, 0)
+}
+
+// runAgentTurns: the runtime with an EXPLICIT turn cap (0 = the env default) —
+// never a per-stage os.Setenv (process-global, raced the batch lanes).
+func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string, stageMaxTurns int) (string, error) {
 	sys := resolveSkills(systemPrompt) // skills appended (skills.go)
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
-	for turn := 0; turn < envMaxTurns(); turn++ {
+	maxTurns := stageMaxTurns
+	if maxTurns <= 0 {
+		maxTurns = envMaxTurns()
+	}
+	for turn := 0; turn < maxTurns; turn++ {
 		msg, err := chat(ctx, rc, msgs, toolSch)
 		if err != nil {
 			return "", err
@@ -198,7 +216,7 @@ func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tool
 		// past the budget, return its last verdict-carrying answer anyway (the
 		// stage can still grade) — never fail the whole pipeline for an
 		// over-chatty agent.
-		if turn == envMaxTurns()-1 {
+		if turn == maxTurns-1 {
 			// forced termination: the last assistant content is the answer; when
 			// the transcript is ALL tool calls (no prose), synthesize a fallback
 			// so the stage still completes with a gradeable response.
@@ -207,10 +225,11 @@ func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tool
 					return *msgs[i].Content, nil
 				}
 			}
-			return "[budget exhausted: the agent spent its " + strconv.Itoa(envMaxTurns()) + " turns on tool calls without a prose verdict — grading from the evidence packet is partial; the check-run results remain authoritative]", nil
+			return "[budget exhausted: the agent spent its " + strconv.Itoa(maxTurns) + " turns on tool calls without a prose verdict — grading from the evidence packet is partial; the check-run results remain authoritative]", nil
 		}
 		for _, tc := range msg.ToolCalls {
-			res := dispatchTool(tc.Function.Name, tc.Function.Arguments)
+			res := dispatchTool(tc.Function.Name, tc.Function.Arguments, rc)
+			fmt.Printf("[tool] %s(%s) -> %.200s\n", tc.Function.Name, tc.Function.Arguments, res)
 			msgs = append(msgs, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: &res})
 		}
 	}
@@ -233,6 +252,7 @@ func lastVerdict(msgs []chatMsg) string {
 
 // runAgentStage: the plan agent stage.
 func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledger) (map[string]any, error) {
+	id := asString(raw["id"])
 	sys := asString(raw["prompt"])
 	if rc != nil {
 		sys = rc.resolveRefs(sys)
@@ -243,15 +263,16 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	if raw != nil {
 		mt = intValue(raw["max_turns"])
 	}
-	if mt > 0 {
-		prev := os.Getenv("EVAL_MAX_TURNS")
-		_ = os.Setenv("EVAL_MAX_TURNS", strconv.Itoa(mt))
-		defer func() { _ = os.Setenv("EVAL_MAX_TURNS", prev) }()
-	}
-	resp, err := runAgent(ctx, rc, sys, "Run this stage per your instructions.", strList(raw["tools"]))
+	// the stage turn cap rides the call — os.Setenv here was PROCESS-GLOBAL and
+	// raced the concurrent batch lanes (RCA 2026.252.2210).
+	resp, err := runAgentTurns(ctx, rc, sys, "Run this stage per your instructions.", strList(raw["tools"]), mt)
 	if err != nil {
 		return map[string]any{}, err
 	}
+	// the stage's raw response lands in the run log — the evidence packet must
+	// carry what the agent actually said (RCA 2026.252.2210: an unusable response
+	// surfaced only as downstream empty renders, with nothing to inspect).
+	fmt.Printf("[agent %s] response: %.400s\n", id, resp)
 	out := map[string]any{"response": resp}
 	for _, name := range strList(raw["outputs"]) {
 		out[name] = extractJSON(resp, name)
@@ -286,28 +307,31 @@ func extractJSON(resp, key string) any {
 		}
 		return resp
 	}
-	idx := strings.Index(resp, "\""+key+"\"")
-	if idx < 0 {
-		return resp
+	// a REAL object parse: the response is ONE JSON object (the stage
+	// contract); scanning for the key was quote-unaware and truncated any
+	// value containing a comma (the report/cold-read prose — RCA 2026.252.2250).
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(resp), &obj); err == nil {
+		return obj[key]
 	}
-	rest := resp[idx+len("\""+key+"\""):]
-	rest = strings.TrimLeft(rest, " :")
-	depth := 0
-	for i, r := range rest {
-		switch r {
-		case '{', '[':
-			depth++
-		case '}', ']':
-			depth--
-		case ',', '\n':
-			if depth == 0 {
-				var v any
-				_ = json.Unmarshal([]byte(rest[:i]), &v)
-				return v
+	// tolerant fallback: the response may carry fence prose around the object
+	start := strings.Index(resp, "{")
+	if start >= 0 {
+		depth := 0
+		for i := start; i < len(resp); i++ {
+			switch resp[i] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+				if depth == 0 {
+					if json.Unmarshal([]byte(resp[start:i+1]), &obj) == nil {
+						return obj[key]
+					}
+					return nil
+				}
 			}
 		}
 	}
-	var v any
-	_ = json.Unmarshal([]byte(rest), &v)
-	return v
+	return nil
 }

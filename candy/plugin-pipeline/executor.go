@@ -38,9 +38,11 @@ func envInt(name string, def int) int {
 // per-run builtins (filled by runPlan):
 type runCtx struct {
 	pr      string
+	repo    string // the eval TARGET repo (the pr tools' gh target) — authored on the entity
 	calver  string
 	workdir string
 	env     map[string]string
+	ledger  *ledger        // PER-RUN stage ledger — never shared (RCA 2026.252.2210: the package-global curLedger raced concurrent batch lanes)
 	ex      *sdk.Executor  // the host executor (single dial) for the ADE verb dispatch
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
 	llm     map[string]any // the entity's llm block (base_url/model/api_key)
@@ -96,7 +98,7 @@ func (rc *runCtx) resolveRefs(s string) string {
 			}
 			return ""
 		case g[3] != "":
-			if r, ok := ledgerRef(g[3]); ok && r.Outputs != nil {
+			if r, ok := rc.ledgerRef(g[3]); ok && r.Outputs != nil {
 				v, _ := r.Outputs[g[4]]
 				if g[6] != "" {
 					if m, ok := v.(map[string]any); ok {
@@ -123,7 +125,7 @@ func (rc *runCtx) typedRef(s string) (any, bool) {
 	if g == nil || g[3] == "" {
 		return nil, false
 	}
-	r, ok := ledgerRef(g[3])
+	r, ok := rc.ledgerRef(g[3])
 	if !ok || r.Outputs == nil {
 		return nil, false
 	}
@@ -191,26 +193,40 @@ func scalar(v any) string {
 	}
 }
 
-var curLedger = &ledger{results: map[string]*StageResult{}}
-
-func ledgerRef(id string) (*StageResult, bool) {
-	r, ok := curLedger.results[id]
+func (rc *runCtx) ledgerRef(id string) (*StageResult, bool) {
+	if rc == nil || rc.ledger == nil {
+		return nil, false
+	}
+	r, ok := rc.ledger.results[id]
 	return r, ok
 }
 
 // ---- stage execution ------------------------------------------------------
 
 func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir string, ex *sdk.Executor) error {
+	return runPlanL(ctx, p, pr, calver, workdir, ex, newLedger())
+}
+
+// runPlanL: the run body with the ledger EXPLICIT (per-run state, RCA
+// 2026.252.2210 — the batch lanes each own their ledger; nothing is global).
+func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir string, ex *sdk.Executor, l *ledger) error {
 	if calver == "" {
 		calver = currentCalver() // the run's stamp ($calver refs + media dirs)
 	}
-	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap(), ex: ex}
+	rc := &runCtx{pr: pr, repo: p.Repo, calver: calver, workdir: workdir, env: envMap(), ex: ex, ledger: l}
+	// the lane identity is bound PER-RUN here — never via os.Setenv, which is
+	// process-global and raced the concurrent batch lanes (RCA 2026.252.2210).
+	// $env.PR_NUMBER resolves to THIS lane's PR; $env.PR_HEAD_SHA to this
+	// lane's head (an operator-set PR_HEAD_SHA still wins — a deliberate pin).
+	if pr != "" {
+		rc.env["PR_NUMBER"] = pr
+		if _, ok := rc.env["PR_HEAD_SHA"]; !ok {
+			rc.env["PR_HEAD_SHA"] = headSHA(pr, rc.repo)
+		}
+	}
 	rc.report = mm(mapOf(p.Report))
 	rc.llm = mm(p.Llm)
 	rc.media = mm(p.Media)
-
-	l := newLedger()
-	curLedger = l
 
 	maxRedo := int(p.Redo.Max)
 	if maxRedo <= 0 {
@@ -396,7 +412,7 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 				res.Outputs[v] = "pass"
 				continue
 			}
-			ok, msg, val := runProbeV(v, verbInput)
+			ok, msg, val := runProbeV(v, verbInput, rc)
 			if !ok {
 				res.Status = "fail"
 				res.Message = msg

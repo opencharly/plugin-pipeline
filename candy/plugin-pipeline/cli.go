@@ -151,26 +151,6 @@ func restAfter(args []string, name string) []string {
 	return nil
 }
 
-// headSHA: the lane's PR head sha via the gh CLI (the lane's own PR tool).
-func headSHA(pr string) string {
-	bin := os.Getenv("GH_BIN")
-	if bin == "" {
-		bin = "gh"
-	}
-	repo := os.Getenv("EVAL_REPO")
-	if repo == "" {
-		repo = os.Getenv("PR_REPO")
-	}
-	if repo == "" {
-		return ""
-	}
-	out, err := exec.Command(bin, "api", "repos/"+repo+"/pulls/"+pr, "--jq", ".head.sha").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // teardownVenue: the charly-native between-lane cleanup — `charly check stop`
 // for the lane's two beds (the sequencing gate then verifies a quiescent venue).
 func teardownVenue(pr, workdir string) error {
