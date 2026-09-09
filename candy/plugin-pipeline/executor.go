@@ -300,6 +300,21 @@ func currentCalver() string {
 	return fmt.Sprintf("%d.%02d.%s", t.Year(), w, t.Format("1504"))
 }
 
+// evalCond evaluates a simple stage condition of the form @stage.output == VALUE
+// against the ledger (the skip_when contract).
+func (rc *runCtx) evalCond(cond string) bool {
+	parts := strings.SplitN(cond, " == ", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	ref := strings.TrimSpace(parts[0])
+	want := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+	if tv, ok := rc.typedRef(ref); ok {
+		return fmt.Sprint(tv) == want
+	}
+	return false
+}
+
 func mapOf(v any) map[string]any {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -334,6 +349,17 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		out, err := runAgentStage(ctx, rc, raw, l)
 		res.Outputs = out
 		return res, err
+		// skip_when: a stage-level condition (e.g. "@eval.verdict == FAIL") that
+		// records the stage as skipped instead of failing - the report still
+		// renders for a FAILED eval (the media gate is only meaningful on a
+		// passing run).
+		if sw := asString(raw["skip_when"]); sw != "" {
+			if rc.evalCond(sw) {
+				res.Status = "skipped"
+				res.Message = "skipped: " + sw
+				return res, nil
+			}
+		}
 	case "probe":
 		verbs := strList(raw["verbs"])
 		input := rc.resolveValue(anyMap(raw["input"]))
