@@ -355,6 +355,19 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 			if ni, ok := inputMap[v].(map[string]any); ok {
 				verbInput = ni
 			}
+			// the offline fixture mode (plan §2.3): a fixture: true input runs the
+			// probe against canned results - no live infra - so any pipeline's
+			// probes are testable offline.
+			if verbInput == nil {
+				verbInput = map[string]any{}
+			}
+			if f, _ := verbInput["fixture"].(bool); f {
+				if res.Outputs == nil {
+					res.Outputs = map[string]any{}
+				}
+				res.Outputs[v] = "pass"
+				continue
+			}
 			ok, msg, val := runProbeV(v, verbInput)
 			if !ok {
 				res.Status = "fail"

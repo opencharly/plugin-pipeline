@@ -46,6 +46,27 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		fmt.Printf("pipeline %s: valid (%d stages)\n", rest[0], len(p.Stages))
 		return 0, nil
 	case "run":
+		// --dry-run (plan row 8): validate the entity + resolve every declared
+		// env ref, then stop without executing.
+		if flagAfter(rest, "--dry-run") != "" || has(rest, "--dry-run") {
+			p, derr := loadEntity(rest[0])
+			if derr != nil {
+				return 1, derr
+			}
+			env := envMap()
+			missing := []string{}
+			for _, k := range envRefs(p) {
+				if _, ok := env[k]; !ok {
+					missing = append(missing, k)
+				}
+			}
+			if len(missing) > 0 {
+				return 1, fmt.Errorf("pipeline dry-run: unresolvable env refs: %v", missing)
+			}
+			fmt.Println("pipeline", rest[0], "dry-run OK, env refs:", len(envRefs(p)), "stages:", len(p.Stages))
+			return 0, nil
+		}
+
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline run <entity> [--pr N] [--prs a b c]")
 		}
