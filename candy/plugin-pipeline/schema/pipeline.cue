@@ -38,7 +38,7 @@
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
 // agent-check: steps, graded by the live agent in the venue via the SDK.
-#AdeStage:     { kind: "ade",     id: string, bed: string, redo?: #RedoSpec, skip_when?: string }
+#AdeStage:     { kind: "ade",     id: string, bed: string, fail_on?: [...string], redo?: #RedoSpec, skip_when?: string }
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }

@@ -272,7 +272,12 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	if err := runGates(rc, p.Gates); err != nil {
 		return err
 	}
-	for _, raw := range p.Stages {
+	// the redo loop: an indexed walk so a trigger can RESTART the chain from
+	// the target stage (re-running the target AND every stage after it) — the
+	// redo edges are sound: redo-plan re-runs bed-render -> control ->
+	// config-audit -> eval -> ..., never a stale inline re-run.
+	for i := 0; i < len(p.Stages); i++ {
+		raw := p.Stages[i]
 		// decode the discriminator
 		kind := asString(raw["kind"])
 		id := asString(raw["id"])
@@ -315,15 +320,11 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger})
 				return fmt.Errorf("LOOP-GUARD: exceed redo max %d for %s", maxRedo, target)
 			}
-			// re-run the target stage from the raw stage list (bounded)
-			for _, tRaw := range p.Stages {
+			// RESTART the chain from the target stage (bounded by the redo
+			// counters above) — the target and every stage after it re-run.
+			for j, tRaw := range p.Stages {
 				if asString(tRaw["id"]) == target {
-					res2, err2 := rc.runStage(ctx, asString(tRaw["kind"]), target, tRaw, l)
-					res2.Duration = time.Since(start)
-					l.put(res2)
-					if err2 != nil {
-						return fmt.Errorf("[redo %s] FAIL-HARD: %w", target, err2)
-					}
+					i = j - 1 // the loop's i++ lands on the target
 					break
 				}
 			}
@@ -356,6 +357,16 @@ func currentCalver() string {
 // run reports the stage skipped, never failed — the R10 completes at ZERO
 // failures; validator finding R10/B12).
 func (rc *runCtx) evalCond(cond string) bool {
+	// the OR grammar: "A || B" — either side true (the AND form is not
+	// needed; the skip_when contract is a single gate).
+	if parts := strings.Split(cond, " || "); len(parts) > 1 {
+		for _, p := range parts {
+			if rc.evalCond(strings.TrimSpace(p)) {
+				return true
+			}
+		}
+		return false
+	}
 	eq := strings.SplitN(cond, " == ", 2)
 	neq := strings.SplitN(cond, " != ", 2)
 	var ref, want string
@@ -523,6 +534,16 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		res.Outputs["verdict"] = verdict
 		res.Outputs["summary"] = summary
 		res.Message = summary
+		// fail_on: the declared verdicts are LANE DEFECTS, not eval outcomes —
+		// the stage fails with the redo trigger (the SETUP_DEFECT path) instead
+		// of flowing a worthless verdict downstream. The verdict is a GATE now.
+		for _, fv := range strList(raw["fail_on"]) {
+			if verdict == fv {
+				res.Status = "fail"
+				res.Trigger = "setup-defect"
+				return res, nil
+			}
+		}
 		return res, nil
 	case "generate":
 		if err := rc.runGenerate(raw); err != nil {

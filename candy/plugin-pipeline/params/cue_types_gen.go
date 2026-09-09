@@ -140,6 +140,8 @@ type AdeStage struct {
 
 	Bed string `json:"bed"`
 
+	Fail_on []string `json:"fail_on,omitempty"`
+
 	Redo RedoSpec `json:"redo,omitempty"`
 
 	Skip_when string `json:"skip_when,omitempty"`
