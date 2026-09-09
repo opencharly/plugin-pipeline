@@ -73,10 +73,14 @@ func runCLI(args []string) (int, error) {
 			_ = os.Setenv("PR_NUMBER", one)
 			_ = os.Setenv("PR_HEAD_SHA", headSHA(one))
 			fmt.Printf("== lane %s ==\n", one)
+			// a lane's terminal FAIL-HARD (e.g. the publish gate closing unapproved)
+			// is the lane's NORMAL end: record it and run the NEXT lane — a batch
+			// never stops at the first lane's gate close.
 			if err := runPlan(context.Background(), p, one, calver, workdir); err != nil {
-				return 1, err
+				fmt.Printf("lane %s: ended (%v)\n", one, err)
+			} else {
+				fmt.Printf("lane %s: done\n", one)
 			}
-			fmt.Printf("lane %s: done\n", one)
 		}
 		fmt.Printf("pipeline %s: OK (lanes=%d)\n", rest[0], len(prs))
 		return 0, nil
