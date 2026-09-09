@@ -39,7 +39,12 @@ func s(v any) string {
 	return ""
 }
 func i(v any) int {
-	if x, ok := v.(float64); ok {
+	switch x := v.(type) {
+	case float64:
+		return int(x)
+	case int:
+		return x
+	case int64:
 		return int(x)
 	}
 	return 0

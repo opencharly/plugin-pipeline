@@ -99,7 +99,12 @@ func renderCheckBlock(a []any, token, tmpl string) string {
 		if len(out) == 0 {
 			prefix = ""
 		}
-		out = append(out, prefix+"- agent-check: "+prose)
+		// the prose may contain colons: a block scalar keeps the YAML valid.
+		out = append(out, prefix+"- agent-check: >-")
+		for _, pl := range strings.Split(prose, "\n") {
+			out = append(out, indent+"    "+pl)
+		}
+
 		out = append(out, indent+"  id: behavior-"+itoa(i+1))
 		out = append(out, indent+"  context: [runtime]")
 	}
