@@ -152,12 +152,18 @@ func restAfter(args []string, name string) []string {
 }
 
 // headSHA: the lane's PR head sha via the gh CLI (the lane's own PR tool).
-func headSHA(pr string) string {
+// headSHA resolves the PR's current head via gh. The repo comes from the
+// ENTITY (runCtx.repo) — the executor subprocess does not see the operator's
+// shell env (RCA 2026.252.2210: the same boundary that broke the pr tools);
+// the env is the standalone-CLI fallback only.
+func headSHA(pr, repo string) string {
 	bin := os.Getenv("GH_BIN")
 	if bin == "" {
 		bin = "gh"
 	}
-	repo := os.Getenv("EVAL_REPO")
+	if repo == "" {
+		repo = os.Getenv("EVAL_REPO")
+	}
 	if repo == "" {
 		repo = os.Getenv("PR_REPO")
 	}

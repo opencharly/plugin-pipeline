@@ -221,7 +221,7 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	if pr != "" {
 		rc.env["PR_NUMBER"] = pr
 		if _, ok := rc.env["PR_HEAD_SHA"]; !ok {
-			rc.env["PR_HEAD_SHA"] = headSHA(pr)
+			rc.env["PR_HEAD_SHA"] = headSHA(pr, rc.repo)
 		}
 	}
 	rc.report = mm(mapOf(p.Report))
