@@ -112,6 +112,10 @@ type RedoSpec struct {
 	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
 
 	Triggers map[string]string `json:"triggers,omitempty"`
+
+	Max int64 `json:"max,omitempty"`
+
+	Escalate_after int64 `json:"escalate_after,omitempty"`
 }
 
 type ProbeStage struct {

@@ -43,7 +43,7 @@
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
 #CommandStage: { kind: "command",  id: string, command: string, expect_exit?: int }   // EXTERNAL processes ONLY
-#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string} }
+#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string}, max?: int & >0, escalate_after?: int & >0 }
 
 #MediaSpec: { files: [string, ...string], min: {[string]: int}, dir: string }
 #ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string, control_bed_template?: string }

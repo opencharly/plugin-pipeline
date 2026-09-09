@@ -304,21 +304,31 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 		}
 		if res.Trigger != "" {
 			target := res.Trigger
+			// the per-stage redo budget (the stage's redo.max/escalate_after)
+			// overrides the entity defaults — the informed agent retry can be
+			// generous (cheap) while the VM redo edges stay tight.
+			stageMax, stageEsc := maxRedo, escalateAfter
 			if m, ok := raw["redo"].(map[string]any); ok {
 				if tr, ok := m["triggers"].(map[string]any); ok {
 					if t, ok := tr[res.Trigger].(string); ok {
 						target = t
 					}
 				}
+				if mx, ok := m["max"].(int); ok && mx > 0 {
+					stageMax = mx
+				}
+				if es, ok := m["escalate_after"].(int); ok && es > 0 {
+					stageEsc = es
+				}
 			}
 			redoCount[target]++
-			if redoCount[target] >= escalateAfter {
-				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger, Message: "loop guard: " + target + " re-entered > " + strconv.Itoa(escalateAfter)})
+			if redoCount[target] >= stageEsc {
+				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger, Message: "loop guard: " + target + " re-entered > " + strconv.Itoa(stageEsc)})
 				return fmt.Errorf("LOOP-GUARD: %s re-entered %d times (escalate)", target, redoCount[target])
 			}
-			if redoCount[target] > maxRedo {
+			if redoCount[target] > stageMax {
 				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger})
-				return fmt.Errorf("LOOP-GUARD: exceed redo max %d for %s", maxRedo, target)
+				return fmt.Errorf("LOOP-GUARD: exceed redo max %d for %s", stageMax, target)
 			}
 			// RESTART the chain from the target stage (bounded by the redo
 			// counters above) — the target and every stage after it re-run.
