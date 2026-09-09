@@ -97,9 +97,14 @@ func (rc *runCtx) resolveRefs(s string) string {
 				v, _ := r.Outputs[g[4]]
 				if g[6] != "" {
 					if m, ok := v.(map[string]any); ok {
-						f, _ := m[g[6]]
-						return scalar(f)
+						if f, ok2 := m[g[6]]; ok2 {
+							if f == nil {
+								return "" // a missing field renders EMPTY, never \"null\"
+							}
+							return scalar(f)
+						}
 					}
+					return ""
 				}
 				return scalar(v)
 			}
@@ -108,11 +113,44 @@ func (rc *runCtx) resolveRefs(s string) string {
 	})
 }
 
+// typedRef resolves @stage.output(.field) to its TYPED ledger value (not a
+// scalar) — powers array-valued vars like the oracle checks.
+func (rc *runCtx) typedRef(s string) (any, bool) {
+	g := refRe.FindStringSubmatch(s)
+	if g == nil || g[3] == "" {
+		return nil, false
+	}
+	r, ok := ledgerRef(g[3])
+	if !ok || r.Outputs == nil {
+		return nil, false
+	}
+	v, ok := r.Outputs[g[4]]
+	if !ok {
+		return nil, false
+	}
+	if g[6] != "" {
+		if m, ok := v.(map[string]any); ok {
+			f, found := m[g[6]]
+			return f, found
+		}
+		return nil, false
+	}
+	return v, true
+}
+
 // resolveValue returns a typed value for YAML inputs (strings are ref-resolved;
 // maps/slices are resolved recursively — never shell text).
 func (rc *runCtx) resolveValue(v any) any {
 	switch t := v.(type) {
 	case string:
+		// typed stage refs (@stage.output or @stage.output.field) keep their
+		// TYPE (e.g. the oracle checks array) — generic strings go through
+		// resolveRefs (scalar). @github refs stay literal.
+		if strings.HasPrefix(t, "@") && !strings.HasPrefix(t, "@github") {
+			if tv, ok := rc.typedRef(t); ok {
+				return tv
+			}
+		}
 		return rc.resolveRefs(t)
 	case map[string]any:
 		m := map[string]any{}
@@ -132,6 +170,9 @@ func (rc *runCtx) resolveValue(v any) any {
 }
 
 func scalar(v any) string {
+	if v == nil {
+		return "" // nil never renders \"null\" in a template
+	}
 	switch t := v.(type) {
 	case string:
 		return t
@@ -157,6 +198,9 @@ func ledgerRef(id string) (*StageResult, bool) {
 // ---- stage execution ------------------------------------------------------
 
 func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir string) error {
+	if calver == "" {
+		calver = currentCalver() // the run's stamp ($calver refs + media dirs)
+	}
 	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap()}
 	rc.report = mm(mapOf(p.Report))
 	rc.media = mm(p.Media)
@@ -247,6 +291,13 @@ func statusSuffix(res *StageResult) string {
 	return ""
 }
 
+// currentCalver: the charly-style calver stamp (year.week.hhmm) for a run.
+func currentCalver() string {
+	t := time.Now()
+	_, w := t.ISOWeek()
+	return fmt.Sprintf("%d.%02d.%s", t.Year(), w, t.Format("1504"))
+}
+
 func mapOf(v any) map[string]any {
 	b, err := json.Marshal(v)
 	if err != nil {
@@ -285,8 +336,24 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		verbs := strList(raw["verbs"])
 		input := rc.resolveValue(anyMap(raw["input"]))
 		inputMap, _ := input.(map[string]any)
+		// path-valued inputs (bed/dir) are workdir-relative: root them at the
+		// run workdir (the pipeline may run from a different cwd, e.g. the eval
+		// lane's beds live in the eval-omarchy worktree).
+		if inputMap != nil && rc.workdir != "" {
+			for _, k := range []string{"bed", "dir"} {
+				if v := s(inputMap[k]); v != "" && !filepath.IsAbs(v) {
+					inputMap[k] = filepath.Join(rc.workdir, v)
+				}
+			}
+		}
 		for _, v := range verbs {
-			ok, msg, val := runProbeV(v, inputMap)
+			// per-verb scoped inputs: the entity may nest each verb's input under
+			// its name (media_gate: {...}) — use that when present.
+			verbInput := inputMap
+			if ni, ok := inputMap[v].(map[string]any); ok {
+				verbInput = ni
+			}
+			ok, msg, val := runProbeV(v, verbInput)
 			if !ok {
 				res.Status = "fail"
 				res.Message = msg
@@ -322,7 +389,24 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 	case "check":
 		bed := rc.resolveRefs(asString(raw["bed"]))
 		expect := strings.TrimSpace(rc.resolveRefs(asString(raw["expect_exit"])))
+		if rc.workdir != "" {
+			_ = os.Chdir(rc.workdir) // the check run must resolve in the workdir project
+		}
 		code := runCheckRun(ctx, bed, rc.workdir)
+		// the check OUTCOME is a stage output: the DETERMINISTIC verdict for the
+		// report (0 -> PASS, 2 -> FAIL, else NO_VALIDATION) + the raw exit.
+		if res.Outputs == nil {
+			res.Outputs = map[string]any{}
+		}
+		res.Outputs["exit"] = code
+		switch code {
+		case 0:
+			res.Outputs["verdict"] = "PASS"
+		case 2:
+			res.Outputs["verdict"] = "FAIL"
+		default:
+			res.Outputs["verdict"] = "NO_VALIDATION"
+		}
 		if expect != "" && expect != "any" {
 			want, _ := strconv.Atoi(expect)
 			if code != want {
@@ -432,11 +516,17 @@ func dumpLedger(l *ledger, path string) error {
 // runCheckRun invokes the EXISTING check executor (charly check run <bed>) —
 // the canonical bed runner, orchestrated by this engine. exit code 2 = step fail.
 func runCheckRun(ctx context.Context, bed, workdir string) int {
+	// the charly that runs the pipeline: CHARLY_BIN override (the runner pins the
+	// released binary; a dev/worktree charly on PATH resolves beds differently).
+	charlyBin := os.Getenv("CHARLY_BIN")
+	if charlyBin == "" {
+		charlyBin = "charly"
+	}
 	args := []string{"check", "run", bed}
 	if workdir != "" {
 		args = append([]string{"-C", workdir}, args...)
 	}
-	cmd := exec.CommandContext(ctx, "charly", args...)
+	cmd := exec.CommandContext(ctx, charlyBin, args...)
 	cmd.Env = os.Environ()
 	_ = cmd.Run()
 	return cmd.ProcessState.ExitCode()

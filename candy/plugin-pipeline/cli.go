@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -44,7 +45,7 @@ func runCLI(args []string) (int, error) {
 		return 0, nil
 	case "run":
 		if len(rest) == 0 {
-			return 2, fmt.Errorf("pipeline run <entity>")
+			return 2, fmt.Errorf("pipeline run <entity> [--pr N] [--prs a b c]")
 		}
 		p, err := loadEntity(rest[0])
 		if err != nil {
@@ -53,10 +54,31 @@ func runCLI(args []string) (int, error) {
 		pr := flagAfter(rest, "--pr")
 		calver := flagAfter(rest, "--calver")
 		workdir := flagAfter(rest, "--workdir")
-		if err := runPlan(context.Background(), p, pr, calver, workdir); err != nil {
-			return 1, err
+		// the charly-native BATCH: --prs a b c runs the SAME entity per PR,
+		// sequencing-gated + venue-cleaned between lanes (the check stage's
+		// teardown handles the VMs; the sequencing gate blocks while a batch
+		// VM lives) — no external loop scripts.
+		prs := restAfter(rest, "--prs")
+		if len(prs) == 0 && pr != "" {
+			prs = []string{pr}
 		}
-		fmt.Printf("pipeline %s: OK\n", rest[0])
+		for i, one := range prs {
+			if i > 0 {
+				// between lanes: the sequencing probe requires the venue quiescent
+				if err := teardownVenue(one, workdir); err != nil {
+					return 1, err
+				}
+			}
+			// per-lane env: the entity's refs read $env.PR_NUMBER/$env.PR_HEAD_SHA
+			_ = os.Setenv("PR_NUMBER", one)
+			_ = os.Setenv("PR_HEAD_SHA", headSHA(one))
+			fmt.Printf("== lane %s ==\n", one)
+			if err := runPlan(context.Background(), p, one, calver, workdir); err != nil {
+				return 1, err
+			}
+			fmt.Printf("lane %s: done\n", one)
+		}
+		fmt.Printf("pipeline %s: OK (lanes=%d)\n", rest[0], len(prs))
 		return 0, nil
 	case "agent":
 		sys := flagAfter(rest, "--system-prompt")
@@ -110,6 +132,63 @@ func has(args []string, f string) bool {
 	}
 	return false
 }
+
+// restAfter returns the args AFTER the named flag (for --prs a b c ...).
+func restAfter(args []string, name string) []string {
+	for i, a := range args {
+		if a == name {
+			out := []string{}
+			for _, x := range args[i+1:] {
+				if strings.HasPrefix(x, "--") {
+					break
+				}
+				out = append(out, x)
+			}
+			return out
+		}
+	}
+	return nil
+}
+
+// headSHA: the lane's PR head sha via the gh CLI (the lane's own PR tool).
+func headSHA(pr string) string {
+	bin := os.Getenv("GH_BIN")
+	if bin == "" {
+		bin = "gh"
+	}
+	repo := os.Getenv("EVAL_REPO")
+	if repo == "" {
+		repo = os.Getenv("PR_REPO")
+	}
+	if repo == "" {
+		return ""
+	}
+	out, err := exec.Command(bin, "api", "repos/"+repo+"/pulls/"+pr, "--jq", ".head.sha").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// teardownVenue: the charly-native between-lane cleanup — `charly check stop`
+// for the lane's two beds (the sequencing gate then verifies a quiescent venue).
+func teardownVenue(pr, workdir string) error {
+	charlyBin := os.Getenv("CHARLY_BIN")
+	if charlyBin == "" {
+		charlyBin = "charly"
+	}
+	for _, suffix := range []string{"-vm-probe", "-vm"} {
+		args := []string{"check", "stop", "check-omarchy-pr-" + pr + suffix}
+		if workdir != "" {
+			args = append([]string{"-C", workdir}, args...)
+		}
+		cmd := exec.Command(charlyBin, args...)
+		cmd.Env = os.Environ()
+		_ = cmd.Run()
+	}
+	return nil
+}
+
 func flagAfter(args []string, name string) string {
 	for i, a := range args {
 		if a == name && i+1 < len(args) {

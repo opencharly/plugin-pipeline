@@ -16,7 +16,7 @@
 	stages: [#Stage, ...#Stage]
 }
 #Stage: #AgentStage | #ProbeStage | #CheckStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], redo?: #RedoSpec }
+#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], max_turns?: int & >0, redo?: #RedoSpec }
 #ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec }
 #CheckStage:   { kind: "check",    id: string, bed: string, expect_exit: int | string, teardown?: bool | "probe", media?: #MediaSpec, redo?: #RedoSpec }
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string }
