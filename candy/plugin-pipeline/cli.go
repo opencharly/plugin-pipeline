@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/opencharly/sdk"
 )
 
 // runCLI: the command:pipeline surface (OpRun args).
@@ -15,7 +17,7 @@ import (
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
 //	pipeline --self-test
-func runCLI(args []string) (int, error) {
+func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	mode := ""
 	var rest []string
 	for _, a := range args {
@@ -51,39 +53,13 @@ func runCLI(args []string) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		pr := flagAfter(rest, "--pr")
 		calver := flagAfter(rest, "--calver")
 		workdir := flagAfter(rest, "--workdir")
 		// the charly-native BATCH: --prs a b c runs the SAME entity per PR,
 		// sequencing-gated + venue-cleaned between lanes (the check stage's
 		// teardown handles the VMs; the sequencing gate blocks while a batch
 		// VM lives) — no external loop scripts.
-		prs := restAfter(rest, "--prs")
-		if len(prs) == 0 && pr != "" {
-			prs = []string{pr}
-		}
-		for i, one := range prs {
-			if i > 0 {
-				// between lanes: the sequencing probe requires the venue quiescent
-				if err := teardownVenue(one, workdir); err != nil {
-					return 1, err
-				}
-			}
-			// per-lane env: the entity's refs read $env.PR_NUMBER/$env.PR_HEAD_SHA
-			_ = os.Setenv("PR_NUMBER", one)
-			_ = os.Setenv("PR_HEAD_SHA", headSHA(one))
-			fmt.Printf("== lane %s ==\n", one)
-			// a lane's terminal FAIL-HARD (e.g. the publish gate closing unapproved)
-			// is the lane's NORMAL end: record it and run the NEXT lane — a batch
-			// never stops at the first lane's gate close.
-			if err := runPlan(context.Background(), p, one, calver, workdir); err != nil {
-				fmt.Printf("lane %s: ended (%v)\n", one, err)
-			} else {
-				fmt.Printf("lane %s: done\n", one)
-			}
-		}
-		fmt.Printf("pipeline %s: OK (lanes=%d)\n", rest[0], len(prs))
-		return 0, nil
+		return runBatch(rest, p, calver, workdir, ex)
 	case "agent":
 		sys := flagAfter(rest, "--system-prompt")
 		prompt := flagAfter(rest, "--prompt")
@@ -118,7 +94,7 @@ func runCLI(args []string) (int, error) {
 
 // CliMain: the OUT-OF-PROCESS CLI-mode entry (sdk.Main dual mode).
 func CliMain(args []string) int {
-	exit, err := runCLI(args)
+	exit, err := runCLI(args, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "pipeline: "+err.Error())
 		if exit == 0 {

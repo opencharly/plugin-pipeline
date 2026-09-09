@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/sdk"
 )
 
 // =============================================================================
@@ -40,6 +41,7 @@ type runCtx struct {
 	calver  string
 	workdir string
 	env     map[string]string
+	ex      *sdk.Executor  // the host executor (single dial) for the ADE verb dispatch
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
 	media   map[string]any // the entity's media: block (files/min/dir)
 }
@@ -197,11 +199,11 @@ func ledgerRef(id string) (*StageResult, bool) {
 
 // ---- stage execution ------------------------------------------------------
 
-func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir string) error {
+func runPlan(ctx context.Context, p params.PipelineInput, pr, calver, workdir string, ex *sdk.Executor) error {
 	if calver == "" {
 		calver = currentCalver() // the run's stamp ($calver refs + media dirs)
 	}
-	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap()}
+	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap(), ex: ex}
 	rc.report = mm(mapOf(p.Report))
 	rc.media = mm(p.Media)
 
@@ -386,39 +388,26 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		}
 		delete(res.Outputs, "value")
 		return res, nil
-	case "check":
+	case "ade":
+		// the org-wide ADE: evaluate the rendered bed's plan in the venue via the
+		// SDK (InvokeProvider over the single dial) + the agent-graded agent-check
+		// steps. The deterministic verdict feeds the report's frontmatter.
 		bed := rc.resolveRefs(asString(raw["bed"]))
-		expect := strings.TrimSpace(rc.resolveRefs(asString(raw["expect_exit"])))
-		if rc.workdir != "" {
-			_ = os.Chdir(rc.workdir) // the check run must resolve in the workdir project
+		if bed != "" && !filepath.IsAbs(bed) && rc.workdir != "" {
+			bed = filepath.Join(rc.workdir, bed)
 		}
-		code := runCheckRun(ctx, bed, rc.workdir)
-		// the check OUTCOME is a stage output: the DETERMINISTIC verdict for the
-		// report (0 -> PASS, 2 -> FAIL, else NO_VALIDATION) + the raw exit.
+		verdict, summary, err := adeVerdict(ctx, rc.ex, bed, rc)
+		if err != nil {
+			res.Status = "fail"
+			res.Message = err.Error()
+			return res, err
+		}
 		if res.Outputs == nil {
 			res.Outputs = map[string]any{}
 		}
-		res.Outputs["exit"] = code
-		switch code {
-		case 0:
-			res.Outputs["verdict"] = "PASS"
-		case 2:
-			res.Outputs["verdict"] = "FAIL"
-		default:
-			res.Outputs["verdict"] = "NO_VALIDATION"
-		}
-		if expect != "" && expect != "any" {
-			want, _ := strconv.Atoi(expect)
-			if code != want {
-				res.Status = "fail"
-				res.Message = fmt.Sprintf("bed %s exit %d, want %d", bed, code, want)
-				res.Trigger = triggerOnFail(raw, "redo-run")
-				return res, fmt.Errorf("%s", res.Message)
-			}
-		}
-		if td := asString(raw["teardown"]); td != "" && td != "false" {
-			_ = teardownBed(bed)
-		}
+		res.Outputs["verdict"] = verdict
+		res.Outputs["summary"] = summary
+		res.Message = summary
 		return res, nil
 	case "generate":
 		if err := rc.runGenerate(raw); err != nil {

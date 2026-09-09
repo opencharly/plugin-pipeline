@@ -64,9 +64,11 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	return nil
 }
 
-// oracle checks injection: the template's own-line ${checks} marker is replaced
-// by the rendered check-steps block (each plan-json check -> a charly check step
-// whose assertion is the command). Indentation comes from the marker line.
+// oracle checks injection (the ADE contract): the template's own-line ${checks}
+// marker becomes one agent-check: prose step per plan-json check - graded by the
+// live agent in the venue (the org-wide ADE), NOT a shell-command contract. The
+// oracle's assertion rides in the prose as the grading hint; indentation comes
+// from the marker line.
 func renderCheckBlock(a []any, token, tmpl string) string {
 	lines := strings.Split(tmpl, "\n")
 	indent := "              "
@@ -83,27 +85,23 @@ func renderCheckBlock(a []any, token, tmpl string) string {
 		if what == "" {
 			what = s(m["id"])
 		}
-		assertion := s(m["assertion"])
-		if assertion == "" {
+		if what == "" {
 			continue
 		}
+		assertion := s(m["assertion"])
+		prose := what
+		if assertion != "" {
+			prose = what + " - verify with: " + assertion
+		}
 		// the FIRST line carries no indent: the marker line's own leading
-		// whitespace already prefixes it in the template (double-indent broke
-		// the generated YAML).
+		// whitespace already prefixes it in the template.
 		prefix := indent
 		if len(out) == 0 {
 			prefix = ""
 		}
-		out = append(out, prefix+"- check: "+what)
+		out = append(out, prefix+"- agent-check: "+prose)
 		out = append(out, indent+"  id: behavior-"+itoa(i+1))
 		out = append(out, indent+"  context: [runtime]")
-		// the assertion is arbitrary shell (single quotes, $(), newlines): a
-		// folded block scalar survives any quoting — but EVERY assertion line
-		// must carry the block indent (multi-line assertions break otherwise).
-		out = append(out, indent+"  command: >-")
-		for _, al := range strings.Split(assertion, "\n") {
-			out = append(out, indent+"    "+al)
-		}
 	}
 	if len(out) == 0 {
 		return ""

@@ -218,6 +218,16 @@ func probeGoldenPresent(input map[string]any) (bool, string) {
 	out, _ := exec.Command("fuser", golden).Output()
 	if len(out) > 0 {
 		return false, "golden held (fuser): " + golden
+
+		// the PROVENANCE cache: rebuild the chain only when the source iso changed.
+		// The rebuild recipe writes <disk>.pipeline-ref with the iso sha256 it was
+		// built from; a mismatch (or missing marker) means the golden is stale.
+		if ref := s(input["ref"]); ref != "" {
+			b, rerr := os.ReadFile(golden + ".pipeline-ref")
+			if rerr != nil || strings.TrimSpace(string(b)) != ref {
+				return false, "golden stale: built from a different iso (run the rebuild recipe - it writes the built-iso marker)"
+			}
+		}
 	}
 	return true, ""
 }
