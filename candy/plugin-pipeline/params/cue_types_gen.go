@@ -62,6 +62,8 @@ type AgentStage struct {
 
 	Outputs []string `json:"outputs,omitempty"`
 
+	Max_turns int64 `json:"max_turns,omitempty"`
+
 	Redo RedoSpec `json:"redo,omitempty"`
 }
 
@@ -85,18 +87,15 @@ type ProbeStage struct {
 	Redo RedoSpec `json:"redo,omitempty"`
 }
 
-type CheckStage struct {
+// #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
+// evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
+// agent-check: steps, graded by the live agent in the venue via the SDK.
+type AdeStage struct {
 	Kind string `json:"kind"`
 
 	Id string `json:"id"`
 
 	Bed string `json:"bed"`
-
-	Expect_exit any/* CUE disjunction: (int|string) */ `json:"expect_exit"`
-
-	Teardown any/* CUE disjunction: (bool|string) */ `json:"teardown,omitempty"`
-
-	Media MediaSpec `json:"media,omitempty"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
 }

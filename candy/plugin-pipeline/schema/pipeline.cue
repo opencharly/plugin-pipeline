@@ -15,10 +15,13 @@
 	report?: #ReportSpec
 	stages: [#Stage, ...#Stage]
 }
-#Stage: #AgentStage | #ProbeStage | #CheckStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], redo?: #RedoSpec }
+#Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
+#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], max_turns?: int & >0, redo?: #RedoSpec }
 #ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec }
-#CheckStage:   { kind: "check",    id: string, bed: string, expect_exit: int | string, teardown?: bool | "probe", media?: #MediaSpec, redo?: #RedoSpec }
+// #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
+// evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
+// agent-check: steps, graded by the live agent in the venue via the SDK.
+#AdeStage:     { kind: "ade",     id: string, bed: string, redo?: #RedoSpec }
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string }

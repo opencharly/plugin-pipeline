@@ -27,6 +27,9 @@ func (rc *runCtx) runMedia(raw map[string]any, l *ledger) error {
 	dir := "media/pr-" + pr + "-" + calver
 	if d := s(raw["dir"]); d != "" {
 		dir = rc.resolveRefs(d)
+		if !filepath.IsAbs(dir) && rc.workdir != "" {
+			dir = filepath.Join(rc.workdir, dir)
+		}
 	}
 	files := []string{"cast", "gif", "mjpeg", "png"}
 	if f := ss(raw["files"]); len(f) > 0 {

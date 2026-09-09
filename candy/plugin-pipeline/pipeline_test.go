@@ -132,7 +132,7 @@ func TestCLIValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CHARLY_PROJECT_DIR", dir)
-	code, err := runCLI([]string{"validate", "test-plan"})
+	code, err := runCLI([]string{"validate", "test-plan"}, nil)
 	if err != nil || code != 0 {
 		t.Fatalf("validate: %d %v", code, err)
 	}

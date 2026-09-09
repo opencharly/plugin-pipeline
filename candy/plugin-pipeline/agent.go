@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -87,6 +88,19 @@ func envMaxTurns() int {
 	}
 	return 20
 }
+
+func intValue(v any) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case string:
+		n, _ := parseInt(t)
+		return n
+	}
+	return 0
+}
 func parseInt(s string) (int, error) {
 	n := 0
 	for _, r := range s {
@@ -157,6 +171,21 @@ func runAgent(ctx context.Context, systemPrompt, prompt string, tools []string) 
 		if len(msg.ToolCalls) == 0 {
 			return content, nil
 		}
+		// graceful-degradation termination: when the model keeps calling tools
+		// past the budget, return its last verdict-carrying answer anyway (the
+		// stage can still grade) — never fail the whole pipeline for an
+		// over-chatty agent.
+		if turn == envMaxTurns()-1 {
+			// forced termination: the last assistant content is the answer; when
+			// the transcript is ALL tool calls (no prose), synthesize a fallback
+			// so the stage still completes with a gradeable response.
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].Role == "assistant" && msgs[i].Content != nil && *msgs[i].Content != "" {
+					return *msgs[i].Content, nil
+				}
+			}
+			return "[budget exhausted: the agent spent its " + strconv.Itoa(envMaxTurns()) + " turns on tool calls without a prose verdict — grading from the evidence packet is partial; the check-run results remain authoritative]", nil
+		}
 		for _, tc := range msg.ToolCalls {
 			res := dispatchTool(tc.Function.Name, tc.Function.Arguments)
 			msgs = append(msgs, chatMsg{Role: "tool", ToolCallID: tc.ID, Content: &res})
@@ -165,11 +194,36 @@ func runAgent(ctx context.Context, systemPrompt, prompt string, tools []string) 
 	return "", fmt.Errorf("agent: turn budget exhausted")
 }
 
+// lastVerdict: scan the transcript backwards for the last non-empty assistant
+// content containing a verdict JSON (the graceful-degradation contract).
+func lastVerdict(msgs []chatMsg) string {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "assistant" && msgs[i].Content != nil {
+			c := *msgs[i].Content
+			if strings.Contains(c, "\"verdict\"") {
+				return c
+			}
+		}
+	}
+	return ""
+}
+
 // runAgentStage: the plan agent stage.
 func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledger) (map[string]any, error) {
 	sys := asString(raw["prompt"])
 	if rc != nil {
 		sys = rc.resolveRefs(sys)
+	}
+	// stage-level turn cap (raw max_turns) overrides the env default; the
+	// stage prompt can then enforce the model's own termination.
+	mt := 0
+	if raw != nil {
+		mt = intValue(raw["max_turns"])
+	}
+	if mt > 0 {
+		prev := os.Getenv("EVAL_MAX_TURNS")
+		_ = os.Setenv("EVAL_MAX_TURNS", strconv.Itoa(mt))
+		defer func() { _ = os.Setenv("EVAL_MAX_TURNS", prev) }()
 	}
 	resp, err := runAgent(ctx, sys, "Run this stage per your instructions.", strList(raw["tools"]))
 	if err != nil {

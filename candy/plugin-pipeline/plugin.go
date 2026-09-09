@@ -38,7 +38,7 @@ func NewMeta() pb.PluginMetaServer {
 
 type provider struct{ pb.UnimplementedProviderServer }
 
-func (provider) Invoke(_ context.Context, req *pb.InvokeRequest) (*pb.InvokeReply, error) {
+func (provider) Invoke(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeReply, error) {
 	switch {
 	case req.GetOp() == sdk.OpRun:
 		var in struct {
@@ -47,7 +47,11 @@ func (provider) Invoke(_ context.Context, req *pb.InvokeRequest) (*pb.InvokeRepl
 		if len(req.GetParamsJson()) > 0 {
 			_ = json.Unmarshal(req.GetParamsJson(), &in)
 		}
-		code, err := runCLI(in.Args)
+		ex, xerr := sdk.ExecutorForInvoke(ctx, req.GetExecutorBrokerId())
+		if xerr != nil {
+			return nil, xerr
+		}
+		code, err := runCLI(in.Args, ex)
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +90,7 @@ func validatePipeline(p params.PipelineInput) error {
 			return errors.New("pipeline: stage missing id or kind")
 		}
 		switch s["kind"] {
-		case "agent", "probe", "check", "generate", "media", "gate", "command":
+		case "agent", "probe", "ade", "generate", "media", "gate", "command":
 		default:
 			return fmt.Errorf("pipeline: unknown stage kind %q", s["kind"])
 		}

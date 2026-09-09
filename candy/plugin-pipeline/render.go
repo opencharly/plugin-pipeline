@@ -1,6 +1,7 @@
 package pluginpipeline
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,10 +25,30 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	if out == "" {
 		return errString("generate: out required")
 	}
+	// relative out: paths are rooted at the RUN workdir (the pipeline may run
+	// from a different cwd than the workdir, e.g. the eval lane operates on the
+	// eval-omarchy worktree while the entity lives in eval-charly).
+	if !filepath.IsAbs(out) {
+		out = filepath.Join(rc.workdir, out)
+	}
 	rendered := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		// @github.com/... refs are CANDY references, never stage outputs:
+		// never substitute them (the @-grammar would otherwise eat the prefix).
+		if strings.HasPrefix(m, "@github") {
+			return m
+		}
 		key := strings.Trim(m, "${}@")
 		if v, ok := vars[key]; ok {
-			return scalar(rc.resolveValue(v))
+			val := rc.resolveValue(v)
+			if val == nil {
+				return "" // nil vars render as empty (a skip plan has no checks), never \"null\"
+			}
+			if a, isArr := val.([]any); isArr && len(a) > 0 {
+				if block := renderCheckBlock(a, m, tmpl); block != "" {
+					return block
+				}
+			}
+			return scalar(val)
 		}
 		return rc.resolveRefs(m)
 	})
@@ -41,6 +62,55 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 		return validateFrontmatter(out)
 	}
 	return nil
+}
+
+// oracle checks injection (the ADE contract): the template's own-line ${checks}
+// marker becomes one agent-check: prose step per plan-json check - graded by the
+// live agent in the venue (the org-wide ADE), NOT a shell-command contract. The
+// oracle's assertion rides in the prose as the grading hint; indentation comes
+// from the marker line.
+func renderCheckBlock(a []any, token, tmpl string) string {
+	lines := strings.Split(tmpl, "\n")
+	indent := "              "
+	for _, l := range lines {
+		if strings.Contains(l, token) {
+			indent = l[:strings.Index(l, token)]
+			break
+		}
+	}
+	out := []string{}
+	for i, item := range a {
+		m, _ := item.(map[string]any)
+		what := s(m["what"])
+		if what == "" {
+			what = s(m["id"])
+		}
+		if what == "" {
+			continue
+		}
+		assertion := s(m["assertion"])
+		prose := what
+		if assertion != "" {
+			prose = what + " - verify with: " + assertion
+		}
+		// the FIRST line carries no indent: the marker line's own leading
+		// whitespace already prefixes it in the template.
+		prefix := indent
+		if len(out) == 0 {
+			prefix = ""
+		}
+		out = append(out, prefix+"- agent-check: "+prose)
+		out = append(out, indent+"  id: behavior-"+itoa(i+1))
+		out = append(out, indent+"  context: [runtime]")
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n")
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }
 
 type errString string
