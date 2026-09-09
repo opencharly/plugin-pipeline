@@ -73,6 +73,26 @@ func TestRunPlanL_BindsLaneEnv(t *testing.T) {
 	}
 }
 
+// TestGateStage_DesignedSkip: a gate with skip_when (an unset env != value)
+// reports the stage SKIPPED, never FAILED — the R10 must complete at ZERO
+// failures (validator finding R10/B12: the publish gate's no-approval run).
+func TestGateStage_DesignedSkip(t *testing.T) {
+	os.Unsetenv("EVAL_APPROVE")
+	wd := t.TempDir()
+	l := newLedger()
+	rc := &runCtx{pr: "9", calver: "2026.1.1", workdir: wd, env: map[string]string{}, ledger: l}
+	res, err := rc.runStage(nil, "gate", "publish", map[string]any{
+		"kind": "gate", "id": "publish",
+		"condition": "$env.EVAL_APPROVE == approve", "skip_when": "$env.EVAL_APPROVE != approve",
+	}, l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != "skipped" {
+		t.Fatalf("an unapproval gate run = %q, want skipped (the designed no-post; R10 zero failures)", res.Status)
+	}
+}
+
 // TestPRToolRef_LaneIdentity: the pr tools must take the PR from the RUN
 // CONTEXT (the lane's own identity), never from the process env the batch
 // lanes raced. The env is the CLI fallback only.

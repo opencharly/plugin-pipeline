@@ -26,7 +26,7 @@
 #AdeStage:     { kind: "ade",     id: string, bed: string, redo?: #RedoSpec, skip_when?: string }
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
-#GateStage:    { kind: "gate",     id: string, condition: string }
+#GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
 #CommandStage: { kind: "command",  id: string, command: string, expect_exit?: int }   // EXTERNAL processes ONLY
 #RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string} }
 

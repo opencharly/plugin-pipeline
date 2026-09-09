@@ -320,17 +320,38 @@ func currentCalver() string {
 
 // evalCond evaluates a simple stage condition of the form @stage.output == VALUE
 // against the ledger (the skip_when contract).
+// evalCond: the skip_when contract — supports == and != with @stage refs and
+// $env.NAME refs (the publish gate's designed skip: EVAL_PUBLISH unset -> the
+// run reports the stage skipped, never failed — the R10 completes at ZERO
+// failures; validator finding R10/B12).
 func (rc *runCtx) evalCond(cond string) bool {
-	parts := strings.SplitN(cond, " == ", 2)
-	if len(parts) != 2 {
+	eq := strings.SplitN(cond, " == ", 2)
+	neq := strings.SplitN(cond, " != ", 2)
+	var ref, want string
+	negate := false
+	switch {
+	case len(eq) == 2:
+		ref, want = eq[0], eq[1]
+	case len(neq) == 2:
+		ref, want, negate = neq[0], neq[1], true
+	default:
 		return false
 	}
-	ref := strings.TrimSpace(parts[0])
-	want := strings.Trim(strings.TrimSpace(parts[1]), "\"")
+	ref = strings.TrimSpace(ref)
+	want = strings.Trim(strings.TrimSpace(want), "\"")
+	// the $env fallback: resolveRefs only substitutes the env when the ref is
+	// exactly an env ref (typedRef handles the @stage refs)
+	val := ""
 	if tv, ok := rc.typedRef(ref); ok {
-		return fmt.Sprint(tv) == want
+		val = fmt.Sprint(tv)
+	} else {
+		val = rc.resolveRefs(ref)
 	}
-	return false
+	match := val == want
+	if negate {
+		return !match
+	}
+	return match
 }
 
 func mapOf(v any) map[string]any {
