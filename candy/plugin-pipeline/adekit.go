@@ -14,12 +14,31 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/opencharly/sdk/checkkit"
 	"github.com/opencharly/sdk"
+	"github.com/opencharly/sdk/checkkit"
 	"github.com/opencharly/sdk/kit"
 	"github.com/opencharly/spec/spec"
 	"gopkg.in/yaml.v3"
 )
+
+// kitExec adapts the host executor to the kit's CheckExecutor seam (the Kind
+// method the spec/exec re-export does not carry).
+type kitExec struct {
+	*sdk.Executor
+	kind string
+}
+
+func (e *kitExec) Kind() string { return e.kind }
+
+// kitVerbs adapts the checkkit resolver to the kit's VerbResolver seam (the
+// RunProvisionAct leg the do:act state-provision verbs need).
+type kitVerbs struct {
+	*checkkit.VerbResolver
+}
+
+func (v *kitVerbs) RunProvisionAct(ctx context.Context, op *spec.Op, verb string) (spec.CheckResult, bool) {
+	return v.RunVerb(ctx, op)
+}
 
 // bedPlanOps parses the rendered bed's charly.yml and returns its plan steps as
 // spec.Op values (the check steps' fields map directly onto the Op: the
@@ -69,7 +88,7 @@ func bedPlanOps(workdir, pr string) ([]spec.Op, error) {
 		}
 		if v, ok := step["stdout"].(map[string]any); ok {
 			if m, ok := v["matches"].(string); ok {
-				op.Stdout = spec.MatcherList{{Match: m}}
+				op.Stdout = spec.MatcherList{{Op: "matches", Value: m}}
 			}
 		}
 		// the check verb's name (the "check:" value) is the step's description
@@ -93,24 +112,28 @@ func runAdeBedKit(ctx context.Context, pr, workdir string, ex *sdk.Executor) (st
 		return "NO_VALIDATION", "ade: plan: " + err.Error(), 0, err
 	}
 	r := kit.NewRunner(kit.RunnerConfig{
-		Exec:       ex,
+		Exec:       &kitExec{Executor: ex, kind: "vm"},
 		Mode:       kit.ModeLive,
 		Env:        envMap(),
 		HasRuntime: true,
-		Verbs:      &checkkit.VerbResolver{Ex: ex, Env: spec.CheckEnv{Mode: "live"}},
+		Verbs:      &kitVerbs{VerbResolver: &checkkit.VerbResolver{Ex: ex, Env: spec.CheckEnv{Mode: "live"}}},
 		Grammar:    checkkit.PlanGrammar{},
 	})
 	results := r.Run(ctx, ops)
 	var fails, skips int
 	var msgs []string
 	for _, res := range results {
+		name := res.Verb
+		if res.Op != nil && res.Op.Description != "" {
+			name = res.Op.Description
+		}
 		switch res.Status {
 		case spec.StatusPass:
 		case spec.StatusSkip:
 			skips++
 		default:
 			fails++
-			msgs = append(msgs, fmt.Sprintf("%s: %s", res.Name, res.Message))
+			msgs = append(msgs, fmt.Sprintf("%s: %s", name, res.Message))
 		}
 	}
 	if fails > 0 {

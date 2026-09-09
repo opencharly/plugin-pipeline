@@ -3,7 +3,7 @@ module github.com/opencharly/plugin-pipeline/candy/plugin-pipeline
 go 1.26.4
 
 require (
-	github.com/opencharly/sdk v0.2026251.531
+	github.com/opencharly/sdk v0.2026252.819
 	github.com/opencharly/spec v0.2026250.2036
 	gopkg.in/yaml.v3 v3.0.1
 )
