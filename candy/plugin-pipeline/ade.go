@@ -63,7 +63,13 @@ func runAdeBed(ctx context.Context, pr, workdir string) (string, string, int, er
 func adeVerdict(ctx context.Context, pr, workdir string) (string, string, error) {
 	bedFile := filepath.Join(workdir, "pr-beds", "pr-"+pr, "charly.yml")
 	if _, err := os.Stat(bedFile); err != nil {
-		return "NO_VALIDATION", "ade: rendered bed missing: " + bedFile, err
+		// the by-name fallback (plan §2.1): resolve ANY existing check-bed entity
+		// from the project's discovered files (the imports' check-bed entities).
+		if found := findBedEntity(workdir, "check-omarchy-pr-"+pr+"-vm"); found != "" {
+			bedFile = found
+		} else {
+			return "NO_VALIDATION", "ade: rendered bed missing: " + bedFile, err
+		}
 	}
 	verdict, summary, code, err := runAdeBed(ctx, pr, workdir)
 	if err != nil {
@@ -86,4 +92,22 @@ func adeVerdictForExit(code int) string {
 	default:
 		return "NO_VALIDATION"
 	}
+}
+
+// findBedEntity: a bounded search for a charly.yml under the workdir that
+// declares the named check-bed entity (the by-name resolution fallback).
+func findBedEntity(workdir, name string) string {
+	found := ""
+	_ = filepath.Walk(workdir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "charly.yml") {
+			return nil
+		}
+		b, rerr := os.ReadFile(path)
+		if rerr == nil && strings.Contains(string(b), name+":") {
+			found = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	return found
 }
