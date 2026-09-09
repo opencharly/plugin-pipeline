@@ -23,7 +23,8 @@ func runBatch(rest []string, p params.PipelineInput, calver, workdir string, ex 
 		}
 	}
 	if len(prs) == 0 {
-		return 2, fmt.Errorf("pipeline run <entity> [--pr N | --prs a b c]")
+		// a generic single-entity run with no PR dimension (a non-eval plan)
+		prs = []string{""}
 	}
 	lanes := int(p.Concurrency.Lanes)
 	if lanes < 1 {
