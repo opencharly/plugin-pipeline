@@ -70,10 +70,10 @@ func buildTools(refs []string) []toolSchema {
 func toolFail(msg string) string { return jsonStr(map[string]string{"status": "fail", "message": msg}) }
 
 // dispatchTool executes one tool call.
-func dispatchTool(name, arguments string) string {
+func dispatchTool(name, arguments string, rc *runCtx) string {
 	switch name {
 	case "get_pr_diff", "get_pr_commits", "get_pr_thread", "get_pr_meta":
-		return prTool(name)
+		return prTool(name, rc)
 	case "media_gate", "lock_audit", "evidence_audit", "config_audit", "resolve_channel",
 		"head_freshness", "sequencing", "golden_present", "lanes_ok":
 		ok, msg := runProbe(name, map[string]any{})
@@ -87,16 +87,38 @@ func dispatchTool(name, arguments string) string {
 	return jsonStr(map[string]string{"error": "unknown tool"})
 }
 
-// prTool: the four PR tools via gh api (read-only).
-func prTool(name string) string {
-	repo := os.Getenv("EVAL_REPO")
-	if repo == "" {
-		repo = os.Getenv("GITHUB_REPOSITORY")
+// prRef resolves the PR identity for the tools: the lane's own runCtx wins
+// (per-lane, race-free), the process env is the CLI fallback only. The repo
+// is global (the eval target), never per-lane.
+func prRef(rc *runCtx) (pr, repo string) {
+	// the ENTITY-authored repo wins: the plugin is served as an out-of-process
+	// executor subprocess whose env is the executor's declared contract, NOT the
+	// operator's shell env (RCA 2026.252.2233: EVAL_REPO never reached the
+	// plugin process — the tools gh-failed 404 and the model skipped).
+	if rc != nil && rc.repo != "" {
+		repo = rc.repo
+	} else {
+		repo = os.Getenv("EVAL_REPO")
+		if repo == "" {
+			repo = os.Getenv("GITHUB_REPOSITORY")
+		}
 	}
-	pr := os.Getenv("PR_NUMBER")
+	if rc != nil && rc.pr != "" {
+		return rc.pr, repo
+	}
+	pr = os.Getenv("PR_NUMBER")
 	if pr == "" {
 		pr = "0"
 	}
+	return pr, repo
+}
+
+// prTool: the four PR tools via gh api (read-only). Lane identity comes from
+// the runCtx (per-lane, race-free); the env is the CLI fallback only — the
+// batch runner set PR_NUMBER per lane via os.Setenv, which is PROCESS-GLOBAL:
+// concurrent lanes raced each other's PRs (RCA 2026.252.2210).
+func prTool(name string, rc *runCtx) string {
+	repo, pr := prRef(rc)
 	switch name {
 	case "get_pr_diff":
 		out, err := exec.Command("gh", "api", "-H", "Accept: application/vnd.github.diff",

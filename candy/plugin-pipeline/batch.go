@@ -8,7 +8,6 @@ package pluginpipeline
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
@@ -42,8 +41,9 @@ func runBatch(rest []string, p params.PipelineInput, calver, workdir string, ex 
 		go func() {
 			defer wg.Done()
 			for one := range jobs {
-				_ = os.Setenv("PR_NUMBER", one)
-				_ = os.Setenv("PR_HEAD_SHA", headSHA(one))
+				// the lane identity rides the runPlan arg — runPlan binds it to the
+				// run context per lane. os.Setenv here was PROCESS-GLOBAL and raced
+				// the concurrent lanes (RCA 2026.252.2210).
 				fmt.Printf("== lane %s ==\n", one)
 				if err := runPlan(context.Background(), p, one, calver, workdir, ex); err != nil {
 					fmt.Printf("lane %s: ended (%v)\n", one, err)

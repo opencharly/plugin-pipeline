@@ -7,6 +7,7 @@
 // The kind:pipeline ENTITY body (a declared plan).
 #PipelineInput: {
 	version?: int & >0
+	repo?:   string // the eval TARGET repo (the pr tools' gh target) — authored on the entity; the env is the CLI fallback only
 	gates?: [...string]
 	redo?: { max?: int, escalate_after?: int }
 	concurrency?: { lanes?: int & >0 }

@@ -80,9 +80,8 @@ func TestRunPlanGenerate(t *testing.T) {
 				"out": wd + "/out.md"},
 		},
 	}
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
 	l := newLedger()
-	curLedger = l
+	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
 	res, err := rc.runStage(nil, "generate", "bed-render", p.Stages[0], l)
 	if err != nil || res.Status != "ok" {
 		t.Fatalf("generate: %v %v", res, err)
