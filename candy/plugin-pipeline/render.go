@@ -122,7 +122,9 @@ func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
 		out = append(out, prefix+"- check: "+what)
 		out = append(out, indent+"  id: behavior-"+itoa(i+1))
 		out = append(out, indent+"  context: [runtime]")
-		out = append(out, indent+"  command: '"+strings.ReplaceAll(assertion, "'", "'\\''")+"'")
+		// YAML single-quote escaping: a quote inside a single-quoted scalar is
+		// DOUBLED (''), never shell-escaped ('\'' — that broke the rendered YAML).
+		out = append(out, indent+"  command: '"+strings.ReplaceAll(assertion, "'", "''")+"'")
 	}
 	if len(out) == 0 {
 		return ""
