@@ -407,7 +407,16 @@ func decodeTypedOutput(resp, name string, spec any) (any, error) {
 		return out, nil
 	case "object":
 		// any JSON object/array — validated as parseable JSON (the checks[],
-		// the plan-json map, the nested structures).
+		// the plan-json map, the nested structures). An ARRAY value's elements
+		// must be objects: the checks contract is [{id, what, assertion,
+		// knownRed}] — a bare-string simplification is a contract violation.
+		if arr, ok := val.([]any); ok {
+			for _, e := range arr {
+				if _, ok := e.(map[string]any); !ok {
+					return nil, fmt.Errorf("expected an array of objects (e.g. [{id, what, assertion, knownRed}]), got a %T element", e)
+				}
+			}
+		}
 		return val, nil
 	default:
 		return nil, fmt.Errorf("unknown output type %q", typ)

@@ -217,6 +217,11 @@ func scalar(v any) string {
 		return strconv.FormatInt(t, 10)
 	case bool:
 		return strconv.FormatBool(t)
+	case []string:
+		// a string list renders SPACE-JOINED — the natural shell form for the
+		// pr-apply file list and the tests for-loop (the JSON-array rendering
+		// broke the rendered bed commands).
+		return strings.Join(t, " ")
 	default:
 		b, _ := json.Marshal(v)
 		return string(b)
