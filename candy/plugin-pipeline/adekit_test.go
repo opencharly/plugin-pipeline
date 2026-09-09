@@ -73,7 +73,7 @@ func TestRunAdeBedKit_NilExecutorMapsToFail(t *testing.T) {
 	if err := os.WriteFile(bed, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	verdict, _, code, err := runAdeBedKit(context.Background(), "7", dir, nil)
+	verdict, _, code, err := runAdeBedKit(context.Background(), "7", "", dir, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
