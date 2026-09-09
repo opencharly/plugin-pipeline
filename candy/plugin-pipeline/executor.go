@@ -344,10 +344,15 @@ func statusSuffix(res *StageResult) string {
 }
 
 // currentCalver: the charly-style calver stamp (year.week.hhmm) for a run.
+// currentCalver: the ONE calver source — YYYY.DDD.HHMM (the day of year),
+// the SAME scheme the org's check-run stamps its run dirs with. The
+// week-number derivation (YYYY.WW.HHMM) is GONE: the media/report calver and
+// the .check run-dir calver were two different schemes in one lane, so a
+// fresh report referenced week-numbered dirs while the runs lived under
+// day-numbered ones (RCA 2026-09-10).
 func currentCalver() string {
 	t := time.Now()
-	_, w := t.ISOWeek()
-	return fmt.Sprintf("%d.%02d.%s", t.Year(), w, t.Format("1504"))
+	return fmt.Sprintf("%d.%03d.%s", t.Year(), t.YearDay(), t.Format("1504"))
 }
 
 // evalCond evaluates a simple stage condition of the form @stage.output == VALUE
