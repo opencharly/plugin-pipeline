@@ -63,7 +63,8 @@ type chatResponse struct {
 // key means ABSENT: the client sends NO auth header (local ollama needs none).
 // llmConfig resolves the LLM endpoint. UNIFORM precedence, every layer:
 // 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
-//    - the operator layer,
+//   - the operator layer,
+//
 // 2. the entity's authored llm block - the lane-author layer,
 // 3. the built-in default - the LOCAL ollama server (deepseek-v4-flash:cloud).
 // An empty RESOLVED key means ABSENT: the client sends NO auth header (the
@@ -166,7 +167,12 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 		return chatMsg{}, fmt.Errorf("LLM: no choices")
 	}
 	m := cr.Choices[0].Message
-	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string { if m.Content != nil { return *m.Content }; return "" }(), 120), len(m.ToolCalls))
+	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string {
+		if m.Content != nil {
+			return *m.Content
+		}
+		return ""
+	}(), 120), len(m.ToolCalls))
 	return chatMsg{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls}, nil
 }
 

@@ -42,7 +42,7 @@ type runCtx struct {
 	calver  string
 	workdir string
 	env     map[string]string
-	ledger  *ledger // PER-RUN stage ledger — never shared (RCA 2026.252.2210: the package-global curLedger raced concurrent batch lanes)
+	ledger  *ledger        // PER-RUN stage ledger — never shared (RCA 2026.252.2210: the package-global curLedger raced concurrent batch lanes)
 	ex      *sdk.Executor  // the host executor (single dial) for the ADE verb dispatch
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
 	llm     map[string]any // the entity's llm block (base_url/model/api_key)
