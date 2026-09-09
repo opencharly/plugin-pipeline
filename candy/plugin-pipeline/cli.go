@@ -181,8 +181,11 @@ func teardownVenue(pr, workdir string) error {
 	if charlyBin == "" {
 		charlyBin = "charly"
 	}
+	// the charly-native venue destroy: `charly vm destroy <golden-entity>
+	// --domain <venued domain>` (the --domain WITHOUT the charly- prefix; the
+	// vm verb adds it). The sequencing gate then verifies a quiescent venue.
 	for _, suffix := range []string{"-vm-probe", "-vm"} {
-		args := []string{"check", "stop", "check-omarchy-pr-" + pr + suffix}
+		args := []string{"vm", "destroy", "check-omarchy-eval-base-inst", "--domain", "check-omarchy-pr-" + pr + suffix}
 		if workdir != "" {
 			args = append([]string{"-C", workdir}, args...)
 		}
