@@ -297,8 +297,10 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 			res.ID = id
 		}
 		l.put(res)
-		if err != nil {
-			// FAIL-HARD (with the ledger for evidence)
+		if err != nil && res.Trigger == "" {
+			// FAIL-HARD (with the ledger for evidence). A TRIGGERED fail is NOT
+			// FAIL-HARD — the trigger processing below restarts the chain from
+			// the target stage (the informed redo), bounded by the redo counters.
 			if workdir != "" {
 				_ = dumpLedger(l, filepath.Join(workdir, "stage-findings.yml"))
 			}

@@ -358,12 +358,25 @@ func probeCorpusAudit(input map[string]any) (bool, string) {
 // The gate FAILS when executed_checks == 0 or the control did not pass — the
 // lane classifies SETUP_DEFECT, never a publish.
 func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
+	// the key aliases: the entity's input carries the bed_name/control_bed_name
+	// keys (the entity-name keys — the probe's path rooting would corrupt bare
+	// paths); honor both spellings so the entity is the single source.
 	bed := s(input["bed"])
+	if bed == "" {
+		bed = s(input["bed_name"])
+	}
 	controlBed := s(input["control_bed"])
+	if controlBed == "" {
+		controlBed = s(input["control_bed_name"])
+	}
 	mediaDir := s(input["media_dir"])
 	if bed == "" || controlBed == "" {
-		return false, "ledger_gate: bed + control_bed required", nil
+		return false, "ledger_gate: bed + control_bed required (input keys: bed/bed_name, control_bed/control_bed_name)", nil
 	}
+	// bed_name/control_bed_name are ENTITY NAMES — countExecutedSteps/controlPassed
+	// already resolve them under .check/<entity>/. The probe stage's bed/dir path
+	// rooting keys on "bed"/"dir" and would MISREAD an entity name as a path, so
+	// the entity-name spellings are handled HERE, never rooted.
 	executed := countExecutedSteps(rc, bed)
 	controlOK := controlPassed(rc, controlBed)
 	mediaOK := true
@@ -374,7 +387,8 @@ func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
 			return false, "ledger_gate: media gate: " + msg, nil
 		}
 	}
-	val := map[string]any{"executed_checks": executed, "control_ok": controlOK, "media_ok": mediaOK}
+	corpusRun, corpusOK, corpusSkipped := corpusFacts(rc, bed, input["corpus_file"])
+	val := map[string]any{"executed_checks": executed, "control_ok": controlOK, "media_ok": mediaOK, "corpus_run": corpusRun, "corpus_ok": corpusOK, "corpus_skipped": corpusSkipped}
 	if executed == 0 {
 		return false, "ledger_gate: zero executed checks in the eval run — the eval verified nothing (SETUP_DEFECT, never a publish)", val
 	}
@@ -382,6 +396,68 @@ func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
 		return false, "ledger_gate: the control bed did not pass — a knownRed claim is unproven (a FAKE assertion)", val
 	}
 	return true, "", val
+}
+
+// corpusFacts: the corpus-surface results of the bed's latest run — the
+// omarchy-corpus steps that ran (PASS or FAIL) and how many passed. The corpus
+// step identity comes from the corpus charly.yml (the single source): every
+// step id: in the corpus candy's plan is a corpus step. Never conflated with
+// the oracle-authored assertions — a corpus result is upstream's own contract.
+func corpusFacts(rc *runCtx, bed string, corpusFile any) (run, okCount, skipped int) {
+	corpusPath := s(corpusFile)
+	if corpusPath == "" {
+		return 0, 0, 0
+	}
+	cb, err := os.ReadFile(corpusPath)
+	if err != nil {
+		return 0, 0, 0
+	}
+	corpusIDs := map[string]bool{}
+	for _, line := range strings.Split(string(cb), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "id: ") {
+			corpusIDs[strings.TrimPrefix(trimmed, "id: ")] = true
+		}
+	}
+	if len(corpusIDs) == 0 {
+		return 0, 0, 0
+	}
+	base := filepath.Join(rc.workdir, ".check", bed)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return 0, 0, 0
+	}
+	latest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return 0, 0, 0
+	}
+	b, err := os.ReadFile(filepath.Join(base, latest, "check-live.log"))
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "PASS  check ") && !strings.HasPrefix(trimmed, "FAIL  check ") && !strings.HasPrefix(trimmed, "SKIP  check ") {
+			continue
+		}
+		// the step id sits in the trailing [id] bracket
+		m := regexp.MustCompile(`\[([a-z0-9-]+)\]`).FindStringSubmatch(trimmed)
+		if m == nil || !corpusIDs[m[1]] {
+			continue
+		}
+		run++
+		if strings.HasPrefix(trimmed, "PASS  check ") {
+			okCount++
+		} else if strings.HasPrefix(trimmed, "SKIP  check ") {
+			skipped++
+		}
+	}
+	return run, okCount, skipped
 }
 
 // countExecutedSteps: the executed step count of the bed's LATEST run — the
