@@ -358,7 +358,6 @@ func statusSuffix(res *StageResult) string {
 	return ""
 }
 
-// currentCalver: the charly-style calver stamp (year.week.hhmm) for a run.
 // currentCalver: the ONE calver source — YYYY.DDD.HHMM (the day of year),
 // the SAME scheme the org's check-run stamps its run dirs with. The
 // week-number derivation (YYYY.WW.HHMM) is GONE: the media/report calver and
