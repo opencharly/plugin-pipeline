@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	pb "github.com/opencharly/spec/proto"
+	"gopkg.in/yaml.v3"
 )
 
 // probes.go — verb:pipeline: the deterministic probe verbs. Each probe is a pure
@@ -104,6 +105,9 @@ func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any
 	case "config_audit":
 		ok, msg := probeConfigAudit(input)
 		return ok, msg, nil
+	case "ledger_gate":
+		ok, msg, val := probeLedgerGate(input, rc)
+		return ok, msg, val
 	case "resolve_channel":
 		ok, msg, ch := probeResolveChannelV(input)
 		return ok, msg, ch
@@ -113,16 +117,19 @@ func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any
 
 func probeResolveChannelV(input map[string]any) (bool, string, any) {
 	channels := mm(input["channels"])
-	def := s(input["default"])
-	if def == "" {
-		def = "stable"
+	// the ORACLE's chosen channel key — the config oracle decides the venue,
+	// the registry is the deterministic mapping. The env-selected default is
+	// GONE (the EVAL_CHANNEL era is over).
+	key := s(input["channel"])
+	if key == "" {
+		key = "stable"
 	}
 	if len(channels) == 0 {
 		return false, "resolve_channel: no channels registry", nil
 	}
-	entry, ok := channels[def]
+	entry, ok := channels[key]
 	if !ok {
-		return false, "resolve_channel: default not in registry: " + def, nil
+		return false, "resolve_channel: channel not in registry: " + key, nil
 	}
 	// the VALUE is the registry ENTRY (golden/provision fields), so the probe
 	// stage can expose them as outputs and the lane can render the bed's from:.
@@ -293,4 +300,119 @@ func probeConfigAudit(input map[string]any) (bool, string) {
 		return false, "config_audit: pr-apply seam missing"
 	}
 	return true, ""
+}
+
+// probeLedgerGate: the deterministic worthless-eval catch. Computes from the
+// evidence tree, never from prose:
+//   - executed_checks: the count of EXECUTED steps in the eval bed's latest run
+//     (the behavior-* + pr-tests + pr-apply steps — the recording steps are
+//     NOT verification; media presence never implies verification).
+//   - control_ok: the control bed's latest run passed completely (every
+//     negated check ok = every knownRed claim proven).
+//   - media_ok: the media gate on the run's media dir.
+//
+// The gate FAILS when executed_checks == 0 or the control did not pass — the
+// lane classifies SETUP_DEFECT, never a publish.
+func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
+	bed := s(input["bed"])
+	controlBed := s(input["control_bed"])
+	mediaDir := s(input["media_dir"])
+	if bed == "" || controlBed == "" {
+		return false, "ledger_gate: bed + control_bed required", nil
+	}
+	executed := countExecutedSteps(rc, bed)
+	controlOK := controlPassed(rc, controlBed)
+	mediaOK := true
+	if mediaDir != "" {
+		ok, msg := probeMediaGate(map[string]any{"dir": mediaDir, "files": []any{"cast", "gif", "mjpeg", "mp4", "png"}, "min": map[string]any{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 4096, "png": 1024}}, rc)
+		mediaOK = ok
+		if !ok {
+			return false, "ledger_gate: media gate: " + msg, nil
+		}
+	}
+	val := map[string]any{"executed_checks": executed, "control_ok": controlOK, "media_ok": mediaOK}
+	if executed == 0 {
+		return false, "ledger_gate: zero executed checks in the eval run — the eval verified nothing (SETUP_DEFECT, never a publish)", val
+	}
+	if !controlOK {
+		return false, "ledger_gate: the control bed did not pass — a knownRed claim is unproven (a FAKE assertion)", val
+	}
+	return true, "", val
+}
+
+// countExecutedSteps: the executed step count of the bed's LATEST run — the
+// plan's check steps that actually RAN (PASS or FAIL), excluding the
+// recording loop. The plan steps live in the check-live phase's log (the
+// top-level summary.yml carries only the phase steps: vm-build/vm-create/
+// deploy-add/check-live — the 952-era confusion, now resolved).
+func countExecutedSteps(rc *runCtx, bed string) int {
+	base := filepath.Join(rc.workdir, ".check", bed)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return 0
+	}
+	latest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return 0
+	}
+	b, err := os.ReadFile(filepath.Join(base, latest, "check-live.log"))
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, line := range strings.Split(string(b), "\n") {
+		// "  PASS  check apply PR ... [pr-apply]  exit=0" / "  FAIL  check ..."
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "PASS  check ") && !strings.HasPrefix(trimmed, "FAIL  check ") {
+			continue
+		}
+		// exclude the recording loop (the rec-* steps) — media presence never
+		// implies verification.
+		if regexp.MustCompile(`\[rec-[a-z-]+\]`).FindString(trimmed) != "" {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// controlPassed: the control bed's latest run passed completely.
+func controlPassed(rc *runCtx, bed string) bool {
+	base := filepath.Join(rc.workdir, ".check", bed)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return false
+	}
+	latest := ""
+	for _, e := range entries {
+		if e.IsDir() && e.Name() > latest {
+			latest = e.Name()
+		}
+	}
+	if latest == "" {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(base, latest, "summary.yml"))
+	if err != nil {
+		return false
+	}
+	var sum struct {
+		Steps []struct {
+			OK bool `yaml:"ok"`
+		} `yaml:"steps"`
+	}
+	if err := yaml.Unmarshal(b, &sum); err != nil {
+		return false
+	}
+	for _, st := range sum.Steps {
+		if !st.OK {
+			return false
+		}
+	}
+	return len(sum.Steps) > 0
 }

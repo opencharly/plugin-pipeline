@@ -47,6 +47,7 @@ type runCtx struct {
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
 	llm     map[string]any // the entity's llm block (base_url/model/api_key)
 	media   map[string]any // the entity's media: block (files/min/dir)
+	skills  map[string]any // the entity's skills: block (corpus) — the agent-stage skill corpus
 }
 
 // StageResult is one ledger row.
@@ -72,6 +73,35 @@ func (l *ledger) put(r *StageResult) {
 		l.order = append(l.order, r.ID)
 	}
 	l.results[r.ID] = r
+}
+
+// facts: the structured ledger facts for the agent user-message injection —
+// every prior stage's outputs rendered compactly. The agent narrates from
+// facts; it never has to guess the evidence layout to know what happened.
+func (l *ledger) facts() string {
+	if l == nil {
+		return "(no ledger)"
+	}
+	var sb strings.Builder
+	for _, id := range l.order {
+		r := l.results[id]
+		if r == nil {
+			continue
+		}
+		sb.WriteString("- " + id + " [" + r.Kind + " " + r.Status + "]")
+		if r.Message != "" {
+			sb.WriteString(": " + truncate(r.Message, 300))
+		}
+		sb.WriteString("\n")
+		for k, v := range r.Outputs {
+			if k == "response" {
+				continue
+			}
+			b, _ := json.Marshal(v)
+			sb.WriteString("    " + k + " = " + truncate(string(b), 400) + "\n")
+		}
+	}
+	return sb.String()
 }
 
 // ---- the reference grammar ----------------------------------------------
@@ -187,6 +217,11 @@ func scalar(v any) string {
 		return strconv.FormatInt(t, 10)
 	case bool:
 		return strconv.FormatBool(t)
+	case []string:
+		// a string list renders SPACE-JOINED — the natural shell form for the
+		// pr-apply file list and the tests for-loop (the JSON-array rendering
+		// broke the rendered bed commands).
+		return strings.Join(t, " ")
 	default:
 		b, _ := json.Marshal(v)
 		return string(b)
@@ -227,6 +262,7 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	rc.report = mm(mapOf(p.Report))
 	rc.llm = mm(p.Llm)
 	rc.media = mm(p.Media)
+	rc.skills = mm(mapOf(p.Skills))
 
 	maxRedo := int(p.Redo.Max)
 	if maxRedo <= 0 {
@@ -241,7 +277,12 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	if err := runGates(rc, p.Gates); err != nil {
 		return err
 	}
-	for _, raw := range p.Stages {
+	// the redo loop: an indexed walk so a trigger can RESTART the chain from
+	// the target stage (re-running the target AND every stage after it) — the
+	// redo edges are sound: redo-plan re-runs bed-render -> control ->
+	// config-audit -> eval -> ..., never a stale inline re-run.
+	for i := 0; i < len(p.Stages); i++ {
+		raw := p.Stages[i]
 		// decode the discriminator
 		kind := asString(raw["kind"])
 		id := asString(raw["id"])
@@ -268,31 +309,37 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 		}
 		if res.Trigger != "" {
 			target := res.Trigger
+			// the per-stage redo budget (the stage's redo.max/escalate_after)
+			// overrides the entity defaults — the informed agent retry can be
+			// generous (cheap) while the VM redo edges stay tight.
+			stageMax, stageEsc := maxRedo, escalateAfter
 			if m, ok := raw["redo"].(map[string]any); ok {
 				if tr, ok := m["triggers"].(map[string]any); ok {
 					if t, ok := tr[res.Trigger].(string); ok {
 						target = t
 					}
 				}
+				if mx, ok := m["max"].(int); ok && mx > 0 {
+					stageMax = mx
+				}
+				if es, ok := m["escalate_after"].(int); ok && es > 0 {
+					stageEsc = es
+				}
 			}
 			redoCount[target]++
-			if redoCount[target] >= escalateAfter {
-				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger, Message: "loop guard: " + target + " re-entered > " + strconv.Itoa(escalateAfter)})
+			if redoCount[target] >= stageEsc {
+				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger, Message: "loop guard: " + target + " re-entered > " + strconv.Itoa(stageEsc)})
 				return fmt.Errorf("LOOP-GUARD: %s re-entered %d times (escalate)", target, redoCount[target])
 			}
-			if redoCount[target] > maxRedo {
+			if redoCount[target] > stageMax {
 				l.put(&StageResult{ID: id, Status: "escalate", Trigger: res.Trigger})
-				return fmt.Errorf("LOOP-GUARD: exceed redo max %d for %s", maxRedo, target)
+				return fmt.Errorf("LOOP-GUARD: exceed redo max %d for %s", stageMax, target)
 			}
-			// re-run the target stage from the raw stage list (bounded)
-			for _, tRaw := range p.Stages {
+			// RESTART the chain from the target stage (bounded by the redo
+			// counters above) — the target and every stage after it re-run.
+			for j, tRaw := range p.Stages {
 				if asString(tRaw["id"]) == target {
-					res2, err2 := rc.runStage(ctx, asString(tRaw["kind"]), target, tRaw, l)
-					res2.Duration = time.Since(start)
-					l.put(res2)
-					if err2 != nil {
-						return fmt.Errorf("[redo %s] FAIL-HARD: %w", target, err2)
-					}
+					i = j - 1 // the loop's i++ lands on the target
 					break
 				}
 			}
@@ -311,11 +358,15 @@ func statusSuffix(res *StageResult) string {
 	return ""
 }
 
-// currentCalver: the charly-style calver stamp (year.week.hhmm) for a run.
+// currentCalver: the ONE calver source — YYYY.DDD.HHMM (the day of year),
+// the SAME scheme the org's check-run stamps its run dirs with. The
+// week-number derivation (YYYY.WW.HHMM) is GONE: the media/report calver and
+// the .check run-dir calver were two different schemes in one lane, so a
+// fresh report referenced week-numbered dirs while the runs lived under
+// day-numbered ones (RCA 2026-09-10).
 func currentCalver() string {
 	t := time.Now()
-	_, w := t.ISOWeek()
-	return fmt.Sprintf("%d.%02d.%s", t.Year(), w, t.Format("1504"))
+	return fmt.Sprintf("%d.%03d.%s", t.Year(), t.YearDay(), t.Format("1504"))
 }
 
 // evalCond evaluates a simple stage condition of the form @stage.output == VALUE
@@ -325,6 +376,16 @@ func currentCalver() string {
 // run reports the stage skipped, never failed — the R10 completes at ZERO
 // failures; validator finding R10/B12).
 func (rc *runCtx) evalCond(cond string) bool {
+	// the OR grammar: "A || B" — either side true (the AND form is not
+	// needed; the skip_when contract is a single gate).
+	if parts := strings.Split(cond, " || "); len(parts) > 1 {
+		for _, p := range parts {
+			if rc.evalCond(strings.TrimSpace(p)) {
+				return true
+			}
+		}
+		return false
+	}
 	eq := strings.SplitN(cond, " == ", 2)
 	neq := strings.SplitN(cond, " != ", 2)
 	var ref, want string
@@ -398,6 +459,12 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 	case "agent":
 		out, err := runAgentStage(ctx, rc, raw, l)
 		res.Outputs = out
+		if re, ok := err.(*redoError); ok {
+			res.Status = "fail"
+			res.Trigger = re.trigger
+			res.Message = re.msg
+			return res, nil
+		}
 		return res, err
 	case "probe":
 		verbs := strList(raw["verbs"])
@@ -474,12 +541,15 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		// executor - see ade.go header.)
 		var verdict, summary string
 		var aerr error
+		// the DECLARED bed (resolved) — the control bed runs the same ADE
+		// machinery on its own entity; the hardcoded -vm name is gone.
+		bed := rc.resolveRefs(asString(raw["bed"]))
 		if rc.ex != nil {
 			// the compiled-in placement: drive the bed's plan in-process (no charly spawn)
-			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, rc.workdir, rc.ex)
+			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, bed, rc.workdir, rc.ex)
 		} else {
 			// the un-compiled placement: the external charly check-run fallback
-			verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.workdir)
+			verdict, summary, aerr = adeVerdict(ctx, rc.pr, bed, rc.workdir)
 		}
 		if aerr != nil {
 			res.Status = "fail"
@@ -492,6 +562,16 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		res.Outputs["verdict"] = verdict
 		res.Outputs["summary"] = summary
 		res.Message = summary
+		// fail_on: the declared verdicts are LANE DEFECTS, not eval outcomes —
+		// the stage fails with the redo trigger (the SETUP_DEFECT path) instead
+		// of flowing a worthless verdict downstream. The verdict is a GATE now.
+		for _, fv := range strList(raw["fail_on"]) {
+			if verdict == fv {
+				res.Status = "fail"
+				res.Trigger = "setup-defect"
+				return res, nil
+			}
+		}
 		return res, nil
 	case "generate":
 		if err := rc.runGenerate(raw); err != nil {

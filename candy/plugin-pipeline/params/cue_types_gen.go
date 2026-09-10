@@ -32,6 +32,14 @@ type PipelineInput struct {
 
 	Report ReportSpec `json:"report,omitempty"`
 
+	// skills: the agent-stage skill corpus. corpus is a workdir-relative dir
+	// holding <skill-name>/SKILL.md; every stage skill: ref names a skill in
+	// this corpus. An unresolvable ref FAILS the stage informatively — the
+	// decorative-ref era is gone.
+	Skills struct {
+		Corpus string `json:"corpus"`
+	} `json:"skills,omitempty"`
+
 	Stages []Stage `json:"stages"`
 }
 
@@ -61,10 +69,17 @@ type ReportSpec struct {
 	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
 
 	Bed_template string `json:"bed_template,omitempty"`
+
+	Control_bed_template string `json:"control_bed_template,omitempty"`
 }
 
 type Stage map[string]any
 
+// #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
+// cutover). Each declared output is a field name -> #OutputType; the runner
+// renders the contract into the prompt mechanically and validates the reply
+// against it at decode. skill: refs are SKILL NAMES in the entity's
+// skills.corpus.
 type AgentStage struct {
 	Kind string `json:"kind"`
 
@@ -76,7 +91,7 @@ type AgentStage struct {
 
 	Tools []string `json:"tools,omitempty"`
 
-	Outputs []string `json:"outputs,omitempty"`
+	Outputs map[string]OutputType `json:"outputs,omitempty"`
 
 	Max_turns int64 `json:"max_turns,omitempty"`
 
@@ -85,10 +100,22 @@ type AgentStage struct {
 	Skip_when string `json:"skip_when,omitempty"`
 }
 
+type OutputType struct {
+	Type string `json:"type"`
+
+	Enum []string `json:"enum,omitempty"`
+
+	Description string `json:"description,omitempty"`
+}
+
 type RedoSpec struct {
 	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
 
 	Triggers map[string]string `json:"triggers,omitempty"`
+
+	Max int64 `json:"max,omitempty"`
+
+	Escalate_after int64 `json:"escalate_after,omitempty"`
 }
 
 type ProbeStage struct {
@@ -117,6 +144,8 @@ type AdeStage struct {
 
 	Bed string `json:"bed"`
 
+	Fail_on []string `json:"fail_on,omitempty"`
+
 	Redo RedoSpec `json:"redo,omitempty"`
 
 	Skip_when string `json:"skip_when,omitempty"`
@@ -134,6 +163,8 @@ type GenerateStage struct {
 	Out string `json:"out"`
 
 	Validate string `json:"validate,omitempty"`
+
+	Negate_checks bool `json:"negate_checks,omitempty"`
 
 	Skip_when string `json:"skip_when,omitempty"`
 }
@@ -204,15 +235,13 @@ type ConfigAuditInput struct {
 }
 
 type ResolveChannelInput struct {
-	Pr int64 `json:"pr"`
+	Channel string `json:"channel"`
 
 	Channels map[string]struct {
 		Golden string `json:"golden"`
 
 		Provision string `json:"provision"`
 	} `json:"channels"`
-
-	Default string `json:"default"`
 }
 
 type EvidenceAuditInput struct {

@@ -45,7 +45,7 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 				return "" // nil vars render as empty (a skip plan has no checks), never \"null\"
 			}
 			if a, isArr := val.([]any); isArr && len(a) > 0 {
-				if block := renderCheckBlock(a, m, tmpl); block != "" {
+				if block := renderCheckBlock(a, m, tmpl, negateChecks(raw)); block != "" {
 					return block
 				}
 			}
@@ -79,12 +79,13 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	return nil
 }
 
-// oracle checks injection (the ADE contract): the template's own-line ${checks}
-// marker becomes one agent-check: prose step per plan-json check - graded by the
-// live agent in the venue (the org-wide ADE), NOT a shell-command contract. The
-// oracle's assertion rides in the prose as the grading hint; indentation comes
-// from the marker line.
-func renderCheckBlock(a []any, token, tmpl string) string {
+// oracle checks injection: the template's own-line ${checks} marker becomes
+// one DETERMINISTIC command check per plan-json check — the checks ARE shell
+// assertions (grep/test), not agent judgments, so they render as
+// check: + id: + command: steps and EXECUTE in the venue. The agent-check
+// prose emission ("verify with:", "no grader bound" SKIPs) is GONE (hard
+// cutover, R5). Indentation comes from the marker line.
+func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
 	lines := strings.Split(tmpl, "\n")
 	indent := "              "
 	for _, l := range lines {
@@ -104,9 +105,13 @@ func renderCheckBlock(a []any, token, tmpl string) string {
 			continue
 		}
 		assertion := s(m["assertion"])
-		prose := what
-		if assertion != "" {
-			prose = what + " - verify with: " + assertion
+		if assertion == "" {
+			continue // a check without an assertion is inert — never rendered
+		}
+		if negate {
+			// the CONTROL bed: the negated assertion must PASS on the pristine
+			// golden — a check that passes without the PR is a FAKE assertion.
+			assertion = "! ( " + assertion + " )"
 		}
 		// the FIRST line carries no indent: the marker line's own leading
 		// whitespace already prefixes it in the template.
@@ -114,14 +119,12 @@ func renderCheckBlock(a []any, token, tmpl string) string {
 		if len(out) == 0 {
 			prefix = ""
 		}
-		// the prose may contain colons: a block scalar keeps the YAML valid.
-		out = append(out, prefix+"- agent-check: >-")
-		for _, pl := range strings.Split(prose, "\n") {
-			out = append(out, indent+"    "+pl)
-		}
-
+		out = append(out, prefix+"- check: "+what)
 		out = append(out, indent+"  id: behavior-"+itoa(i+1))
 		out = append(out, indent+"  context: [runtime]")
+		// YAML single-quote escaping: a quote inside a single-quoted scalar is
+		// DOUBLED (''), never shell-escaped ('\'' — that broke the rendered YAML).
+		out = append(out, indent+"  command: '"+strings.ReplaceAll(assertion, "'", "''")+"'")
 	}
 	if len(out) == 0 {
 		return ""
@@ -131,6 +134,15 @@ func renderCheckBlock(a []any, token, tmpl string) string {
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+// negateChecks: the generate stage's negate_checks flag — the CONTROL bed
+// renders the checks negated (the assertion-integrity proof).
+func negateChecks(raw map[string]any) bool {
+	if b, ok := raw["negate_checks"].(bool); ok {
+		return b
+	}
+	return false
 }
 
 type errString string

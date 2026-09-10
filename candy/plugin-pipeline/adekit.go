@@ -43,10 +43,16 @@ func (v *kitVerbs) RunProvisionAct(ctx context.Context, op *spec.Op, verb string
 // bedPlanOps parses the rendered bed's charly.yml and returns its plan steps as
 // spec.Op values (the check steps' fields map directly onto the Op: the
 // command/stdout/eventually/retry_interval/context/id + the assert intent).
-func bedPlanOps(workdir, pr string) ([]spec.Op, error) {
+func bedPlanOps(workdir, pr, bed string) ([]spec.Op, error) {
+	if bed == "" {
+		bed = "check-omarchy-pr-" + pr + "-vm"
+	}
 	bedFile := filepath.Join(workdir, "pr-beds", "pr-"+pr, "charly.yml")
+	if strings.HasSuffix(bed, "-control") {
+		bedFile = filepath.Join(workdir, "pr-beds", "pr-"+pr+"-control", "charly.yml")
+	}
 	if _, err := os.Stat(bedFile); err != nil {
-		if found := findBedEntity(workdir, "check-omarchy-pr-"+pr+"-vm"); found != "" {
+		if found := findBedEntity(workdir, bed); found != "" {
 			bedFile = found
 		} else {
 			return nil, err
@@ -106,8 +112,8 @@ func bedPlanOps(workdir, pr string) ([]spec.Op, error) {
 
 // runAdeBedKit drives the rendered bed's plan in-process and maps the results to
 // the deterministic verdict (all pass → PASS; any fail → FAIL; else NO_VALIDATION).
-func runAdeBedKit(ctx context.Context, pr, workdir string, ex *sdk.Executor) (string, string, int, error) {
-	ops, err := bedPlanOps(workdir, pr)
+func runAdeBedKit(ctx context.Context, pr, bed, workdir string, ex *sdk.Executor) (string, string, int, error) {
+	ops, err := bedPlanOps(workdir, pr, bed)
 	if err != nil {
 		return "NO_VALIDATION", "ade: plan: " + err.Error(), 0, err
 	}

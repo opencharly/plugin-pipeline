@@ -15,23 +15,38 @@
 	llm?: #LLMSpec
 	media?: #MediaSpec
 	report?: #ReportSpec
+	// skills: the agent-stage skill corpus. corpus is a workdir-relative dir
+	// holding <skill-name>/SKILL.md; every stage skill: ref names a skill in
+	// this corpus. An unresolvable ref FAILS the stage informatively — the
+	// decorative-ref era is gone.
+	skills?: { corpus: string }
 	stages: [#Stage, ...#Stage]
 }
 #Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: [...string], max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string }
+// #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
+// cutover). Each declared output is a field name -> #OutputType; the runner
+// renders the contract into the prompt mechanically and validates the reply
+// against it at decode. skill: refs are SKILL NAMES in the entity's
+// skills.corpus.
+#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: { [string]: #OutputType }, max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string }
+#OutputType: {
+	type: "string" | "int" | "bool" | "enum" | "string_list" | "object"
+	enum?: [...string]      // type: "enum" — the allowed values
+	description?: string    // rendered into the prompt contract
+}
 #ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec, skip_when?: string }
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
 // agent-check: steps, graded by the live agent in the venue via the SDK.
-#AdeStage:     { kind: "ade",     id: string, bed: string, redo?: #RedoSpec, skip_when?: string }
-#GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, skip_when?: string }
+#AdeStage:     { kind: "ade",     id: string, bed: string, fail_on?: [...string], redo?: #RedoSpec, skip_when?: string }
+#GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
 #CommandStage: { kind: "command",  id: string, command: string, expect_exit?: int }   // EXTERNAL processes ONLY
-#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string} }
+#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string}, max?: int & >0, escalate_after?: int & >0 }
 
 #MediaSpec: { files: [string, ...string], min: {[string]: int}, dir: string }
-#ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string }
+#ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string, control_bed_template?: string }
 
 // Probe verb inputs (deterministic, engine-native).
 #MediaGateInput:      { dir: string, files: [string], min: {[string]: int} }
@@ -39,7 +54,7 @@
 #SequencingInput:     { lanes: int, golden: string }
 #HeadFreshnessInput:  { plan_sha: string, pr: int, repo: string }
 #ConfigAuditInput:    { bed: string, pr: int }
-#ResolveChannelInput: { pr: int, channels: {[string]: { golden: string, provision: string } }, default: string }
+#ResolveChannelInput: { channel: string, channels: {[string]: { golden: string, provision: string } } }
 #EvidenceAuditInput:  { dir: string, files: [string], min: {[string]: int}, trees: [string] }
 
 // The P1 agent runtime input (the standalone + stage op).
