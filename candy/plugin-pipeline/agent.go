@@ -452,4 +452,3 @@ func parseReplyObject(resp string) (map[string]any, error) {
 	}
 	return nil, fmt.Errorf("unterminated JSON object in the reply")
 }
-
