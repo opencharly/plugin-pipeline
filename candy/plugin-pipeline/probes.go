@@ -105,6 +105,9 @@ func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any
 	case "config_audit":
 		ok, msg := probeConfigAudit(input)
 		return ok, msg, nil
+	case "corpus_audit":
+		ok, msg := probeCorpusAudit(input)
+		return ok, msg, nil
 	case "ledger_gate":
 		ok, msg, val := probeLedgerGate(input, rc)
 		return ok, msg, val
@@ -298,6 +301,47 @@ func probeConfigAudit(input map[string]any) (bool, string) {
 	}
 	if !strings.Contains(string(b), "pr-apply") {
 		return false, "config_audit: pr-apply seam missing"
+	}
+	return true, ""
+}
+
+// probeCorpusAudit: the corpus gate (the charly.yml single source). Every
+// oracle-selected corpus step id MUST exist as a step id: in the omarchy-corpus
+// candy charly.yml — the CUE-validated single source. A selected id the plan
+// does not carry is the oracle's gap; the informed redo re-authors. An empty
+// selection is legal (exit ok).
+func probeCorpusAudit(input map[string]any) (bool, string) {
+	corpus := s(input["corpus"])
+	if corpus == "" {
+		return false, "corpus_audit: corpus (the omarchy-corpus charly.yml path) required"
+	}
+	b, err := os.ReadFile(corpus)
+	if err != nil {
+		return false, "corpus_audit: corpus unreadable: " + corpus
+	}
+	var selected []string
+	switch ids := input["ids"].(type) {
+	case []string:
+		selected = ids
+	case []any:
+		selected = strList(ids)
+	case string:
+		if strings.TrimSpace(ids) != "" {
+			selected = strings.Fields(ids)
+		}
+	}
+	if len(selected) == 0 {
+		return true, "" // an empty corpus is legal (the oracle's corpus_note says why)
+	}
+	for _, id := range selected {
+		if id == "" {
+			continue
+		}
+		// the step id line: the candy's plan is CUE-validated, so the id:
+		// indentation is the stable two-space-per-level shape the loader emits.
+		if !strings.Contains(string(b), "id: "+id+"\n") && !strings.HasSuffix(string(b), "id: "+id) {
+			return false, "corpus_audit: the selected corpus step '" + id + "' is not in the omarchy-corpus plan (charly.yml) - the oracle's gap"
+		}
 	}
 	return true, ""
 }
