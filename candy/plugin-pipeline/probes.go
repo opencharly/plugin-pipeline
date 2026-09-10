@@ -341,7 +341,10 @@ func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
 }
 
 // countExecutedSteps: the executed step count of the bed's LATEST run — the
-// steps that actually ran (ok or fail), excluding the recording loop.
+// plan's check steps that actually RAN (PASS or FAIL), excluding the
+// recording loop. The plan steps live in the check-live phase's log (the
+// top-level summary.yml carries only the phase steps: vm-build/vm-create/
+// deploy-add/check-live — the 952-era confusion, now resolved).
 func countExecutedSteps(rc *runCtx, bed string) int {
 	base := filepath.Join(rc.workdir, ".check", bed)
 	entries, err := os.ReadDir(base)
@@ -357,24 +360,23 @@ func countExecutedSteps(rc *runCtx, bed string) int {
 	if latest == "" {
 		return 0
 	}
-	b, err := os.ReadFile(filepath.Join(base, latest, "summary.yml"))
+	b, err := os.ReadFile(filepath.Join(base, latest, "check-live.log"))
 	if err != nil {
 		return 0
 	}
-	var sum struct {
-		Steps []struct {
-			Name string `yaml:"name"`
-			OK   bool   `yaml:"ok"`
-		} `yaml:"steps"`
-	}
-	if err := yaml.Unmarshal(b, &sum); err != nil {
-		return 0
-	}
 	n := 0
-	for _, st := range sum.Steps {
-		if strings.HasPrefix(st.Name, "check ") && !strings.Contains(st.Name, "recording") && !strings.Contains(st.Name, "SPICE") && !strings.Contains(st.Name, "screenshot") && !strings.Contains(st.Name, "GIF") && !strings.Contains(st.Name, "MP4") {
-			n++
+	for _, line := range strings.Split(string(b), "\n") {
+		// "  PASS  check apply PR ... [pr-apply]  exit=0" / "  FAIL  check ..."
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "PASS  check ") && !strings.HasPrefix(trimmed, "FAIL  check ") {
+			continue
 		}
+		// exclude the recording loop (the rec-* steps) — media presence never
+		// implies verification.
+		if regexp.MustCompile(`\[rec-[a-z-]+\]`).FindString(trimmed) != "" {
+			continue
+		}
+		n++
 	}
 	return n
 }
