@@ -378,8 +378,18 @@ func currentCalver() string {
 // run reports the stage skipped, never failed — the R10 completes at ZERO
 // failures; validator finding R10/B12).
 func (rc *runCtx) evalCond(cond string) bool {
-	// the OR grammar: "A || B" — either side true (the AND form is not
-	// needed; the skip_when contract is a single gate).
+	// the AND grammar: "A && B" — both sides true (e.g. the report gate
+	// "@eval.verdict != PASS && @eval.verdict != FAIL" — skip only when the
+	// verdict is neither PASS nor FAIL).
+	if parts := strings.Split(cond, " && "); len(parts) > 1 {
+		for _, p := range parts {
+			if !rc.evalCond(strings.TrimSpace(p)) {
+				return false
+			}
+		}
+		return true
+	}
+	// the OR grammar: "A || B" — either side true.
 	if parts := strings.Split(cond, " || "); len(parts) > 1 {
 		for _, p := range parts {
 			if rc.evalCond(strings.TrimSpace(p)) {
