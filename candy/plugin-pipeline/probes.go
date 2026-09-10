@@ -348,7 +348,6 @@ func probeCorpusAudit(input map[string]any) (bool, string) {
 
 // probeLedgerGate: the deterministic worthless-eval catch. Computes from the
 // evidence tree, never from prose:
-// evidence tree, never from prose:
 //   - executed_checks: the count of EXECUTED steps in the eval bed's latest run
 //     (the behavior-* + pr-tests + pr-apply steps — the recording steps are
 //     NOT verification; media presence never implies verification).

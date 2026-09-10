@@ -25,11 +25,12 @@ func TestProbeCorpusAudit(t *testing.T) {
 	if ok, _ := probeCorpusAudit(map[string]any{"corpus": corpus, "ids": []string{}}); !ok {
 		t.Fatal("probeCorpusAudit(empty) failed, want ok")
 	}
-	// A selected id the plan does not carry → the oracle's gap.
+	// A selected id the plan does not carry → the oracle's gap, with the
+	// message naming the step + the single source.
 	if ok, msg := probeCorpusAudit(map[string]any{"corpus": corpus, "ids": []string{"no-such-step"}}); ok {
 		t.Fatal("probeCorpusAudit(missing id) = ok, want the gap failure")
-	} else if !filepath.IsAbs(msg[:1]) && msg == "" {
-		t.Fatalf("the gap failure carries no message")
+	} else if msg == "" {
+		t.Fatal("the gap failure carries no message")
 	}
 	// An unreadable corpus file → fail.
 	if ok, _ := probeCorpusAudit(map[string]any{"corpus": filepath.Join(dir, "missing.yml"), "ids": []string{"x"}}); ok {
