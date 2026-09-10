@@ -57,6 +57,15 @@ func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, in
 			return "NO_VALIDATION", "ade: run: " + rerr.Error(), 0, rerr
 		}
 	}
+	// the runner NEVER leaves a VM running: --keep-venue kept the domain for
+	// the evidence collection — destroy it now (best-effort; a lingering
+	// domain holds the golden's snapshot and blocks the next lane's
+	// sequencing gate).
+	destroy := exec.CommandContext(ctx, charlyBin, "vm", "destroy", bed)
+	destroy.Env = os.Environ()
+	if dout, derr := destroy.CombinedOutput(); derr != nil {
+		summary += "\n[ade] venue destroy: " + strings.TrimSpace(string(dout))
+	}
 	verdict := adeVerdictForExit(code)
 	return verdict, summary, code, nil
 }
