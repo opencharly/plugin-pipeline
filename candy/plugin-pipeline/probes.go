@@ -358,12 +358,25 @@ func probeCorpusAudit(input map[string]any) (bool, string) {
 // The gate FAILS when executed_checks == 0 or the control did not pass — the
 // lane classifies SETUP_DEFECT, never a publish.
 func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
+	// the key aliases: the entity's input carries the bed_name/control_bed_name
+	// keys (the entity-name keys — the probe's path rooting would corrupt bare
+	// paths); honor both spellings so the entity is the single source.
 	bed := s(input["bed"])
+	if bed == "" {
+		bed = s(input["bed_name"])
+	}
 	controlBed := s(input["control_bed"])
+	if controlBed == "" {
+		controlBed = s(input["control_bed_name"])
+	}
 	mediaDir := s(input["media_dir"])
 	if bed == "" || controlBed == "" {
-		return false, "ledger_gate: bed + control_bed required", nil
+		return false, "ledger_gate: bed + control_bed required (input keys: bed/bed_name, control_bed/control_bed_name)", nil
 	}
+	// bed_name/control_bed_name are ENTITY NAMES — countExecutedSteps/controlPassed
+	// already resolve them under .check/<entity>/. The probe stage's bed/dir path
+	// rooting keys on "bed"/"dir" and would MISREAD an entity name as a path, so
+	// the entity-name spellings are handled HERE, never rooted.
 	executed := countExecutedSteps(rc, bed)
 	controlOK := controlPassed(rc, controlBed)
 	mediaOK := true
