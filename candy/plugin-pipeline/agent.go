@@ -57,17 +57,12 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
-// llmConfig resolves the LLM endpoint. Precedence: the ENV overrides
-// (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY - the operator layer)
-// > the entity's authored llm block (the lane-author layer) > the built-in
-// default (the LOCAL ollama server with deepseek-v4-flash:cloud). An empty
-// key means ABSENT: the client sends NO auth header (local ollama needs none).
-// llmConfig resolves the LLM endpoint. UNIFORM precedence, every layer:
+// llmConfig resolves the LLM endpoint. Precedence, every layer:
 // 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
 //   - the operator layer,
 //
 // 2. the entity's authored llm block - the lane-author layer,
-// 3. the built-in default - the LOCAL ollama server (deepseek-v4-flash:cloud).
+// 3. the built-in default - the LOCAL ollama server (deepseek-v4.1-flash:cloud).
 // An empty RESOLVED key means ABSENT: the client sends NO auth header (the
 // local ollama needs none) - a missing secret can never zero out other layers.
 func llmBaseURL(rc *runCtx) string {
@@ -90,7 +85,7 @@ func llmModel(rc *runCtx) string {
 			return v
 		}
 	}
-	return "deepseek-v4-flash:cloud"
+	return "deepseek-v4.1-flash:cloud"
 }
 func llmAPIKey(rc *runCtx) string {
 	if v := os.Getenv("EVAL_LLM_API_KEY"); v != "" {

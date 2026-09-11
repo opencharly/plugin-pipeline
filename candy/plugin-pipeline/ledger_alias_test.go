@@ -33,9 +33,9 @@ func TestProbeLedgerGate_Aliases(t *testing.T) {
 	rc := &runCtx{workdir: dir}
 	// the ENTITY-NAME spelling (the charly.yml's actual keys) — rooted at the workdir
 	ok, msg, val := probeLedgerGate(map[string]any{
-		"bed_name": "check-omarchy-pr-42-vm",
+		"bed_name":         "check-omarchy-pr-42-vm",
 		"control_bed_name": "check-omarchy-pr-42-control",
-		"media_dir": "",
+		"media_dir":        "",
 	}, rc)
 	if !ok {
 		t.Fatalf("probeLedgerGate(bed_name aliases) = %v", msg)
