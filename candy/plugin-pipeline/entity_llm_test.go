@@ -65,3 +65,15 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 		t.Errorf("auth: got %q - an absent resolved key must send NO header", seen["auth"])
 	}
 }
+
+// TestLLMDefaultModel: with no env override and no entity llm block, the
+// built-in default (the LOCAL ollama server model) applies. FAILS without the
+// deepseek-v4.1-flash:cloud default (the V4.0->V4.1 cutover).
+func TestLLMDefaultModel(t *testing.T) {
+	if got := llmModel(nil); got != "deepseek-v4.1-flash:cloud" {
+		t.Errorf("llmModel default: got %q, want \"deepseek-v4.1-flash:cloud\"", got)
+	}
+	if got := llmBaseURL(nil); got != "http://localhost:11434/v1" {
+		t.Errorf("llmBaseURL default: got %q, want http://localhost:11434/v1", got)
+	}
+}
