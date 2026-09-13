@@ -15,6 +15,27 @@ import (
 
 var calverRe = regexp.MustCompile("[0-9]{3,}") // extract calver from a run dir when not passed
 
+// mediaDir resolves the media stage's output dir. Precedence: the stage's own
+// dir: (if authored), then the pipeline-level media.dir (the lane's ONE layout
+// declaration), then the legacy media/pr-<pr>-<calver> default. The media.dir
+// fallback is load-bearing: without it the stage silently wrote the legacy dir
+// while the media_gate / ledger-gate / report read the configured layout, so
+// every PR eval lost its media (RCA: the layout cutover changed the config dirs
+// but the stage reads only its own raw["dir"]).
+func (rc *runCtx) mediaDir(raw map[string]any, pr, calver string) string {
+	dir := "media/pr-" + pr + "-" + calver
+	switch {
+	case s(raw["dir"]) != "":
+		dir = rc.resolveRefs(s(raw["dir"]))
+	case rc.media != nil && s(rc.media["dir"]) != "":
+		dir = rc.resolveRefs(s(rc.media["dir"]))
+	}
+	if !filepath.IsAbs(dir) && rc.workdir != "" {
+		dir = filepath.Join(rc.workdir, dir)
+	}
+	return dir
+}
+
 func (rc *runCtx) runMedia(raw map[string]any, l *ledger) error {
 	pr := rc.pr
 	if pr == "" {
@@ -24,13 +45,7 @@ func (rc *runCtx) runMedia(raw map[string]any, l *ledger) error {
 	if calver == "" {
 		calver = "run"
 	}
-	dir := "media/pr-" + pr + "-" + calver
-	if d := s(raw["dir"]); d != "" {
-		dir = rc.resolveRefs(d)
-		if !filepath.IsAbs(dir) && rc.workdir != "" {
-			dir = filepath.Join(rc.workdir, dir)
-		}
-	}
+	dir := rc.mediaDir(raw, pr, calver)
 	files := []string{"cast", "gif", "mjpeg", "png"}
 	if f := ss(raw["files"]); len(f) > 0 {
 		files = f
