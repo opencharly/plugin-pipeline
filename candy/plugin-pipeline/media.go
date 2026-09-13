@@ -22,6 +22,12 @@ var calverRe = regexp.MustCompile("[0-9]{3,}") // extract calver from a run dir 
 // while the media_gate / ledger-gate / report read the configured layout, so
 // every PR eval lost its media (RCA: the layout cutover changed the config dirs
 // but the stage reads only its own raw["dir"]).
+//
+// NOTE (behaviour change from the pre-fix code): a RELATIVE result — including
+// the legacy default — is now joined with rc.workdir. The old code joined only
+// the raw["dir"] branch, so the default was CWD-relative; the workdir is the
+// project root (the lane runs with workdir == the eval-omarchy checkout), so
+// this makes the default land in the repo as intended.
 func (rc *runCtx) mediaDir(raw map[string]any, pr, calver string) string {
 	dir := "media/pr-" + pr + "-" + calver
 	switch {
