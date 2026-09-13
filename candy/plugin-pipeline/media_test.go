@@ -3,6 +3,8 @@ package pluginpipeline
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 )
 
 // The media stage must write where the media_gate / ledger-gate / report read.
@@ -45,5 +47,20 @@ func TestMediaDir_LegacyDefaultWhenUnset(t *testing.T) {
 	want := filepath.Join(wd, "media", "pr-9-c")
 	if got != want {
 		t.Fatalf("mediaDir = %q, want the legacy default %q", got, want)
+	}
+}
+
+// Regression: the executor populated rc.media with mm(p.Media) — but p.Media is a
+// params.MediaSpec STRUCT, so mm()'s map assertion returned nil and the
+// pipeline-level media.dir never reached the stage. This mirrors the executor's
+// assignment so the old bug fails the test.
+func TestMediaDir_FromPipelineSpec(t *testing.T) {
+	wd := t.TempDir()
+	p := params.PipelineInput{Media: params.MediaSpec{Dir: "media/$calver/pr-$pr"}}
+	rc := &runCtx{pr: "9", calver: "c", workdir: wd, media: mm(mapOf(p.Media))}
+	got := rc.mediaDir(map[string]any{}, "9", "c")
+	want := filepath.Join(wd, "media", "c", "pr-9")
+	if got != want {
+		t.Fatalf("mediaDir = %q, want the pipeline media.dir %q (rc.media not populated from p.Media)", got, want)
 	}
 }
