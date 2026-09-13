@@ -261,7 +261,11 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 	}
 	rc.report = mm(mapOf(p.Report))
 	rc.llm = mm(p.Llm)
-	rc.media = mm(p.Media)
+	// p.Media is a STRUCT (params.MediaSpec), not a map — mm()'s map assertion
+	// returns nil for it, so the pipeline-level media.dir was never visible to the
+	// media stage (which then fell back to the legacy media/pr-<pr>-<calver>
+	// default while media_gate/report expected media/<calver>/pr-<pr>). RCA 2026.257.
+	rc.media = mm(mapOf(p.Media))
 	rc.skills = mm(mapOf(p.Skills))
 
 	maxRedo := int(p.Redo.Max)

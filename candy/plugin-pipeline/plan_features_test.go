@@ -85,7 +85,7 @@ func TestChecksRenderAsCommandSteps(t *testing.T) {
 	tmpl := `steps:
               - check: the guest must report its hostname`
 	out := renderCheckBlock([]any{map[string]any{"what": "the guest must report its hostname", "assertion": "uname -n | grep -q ."}}, "check", tmpl, false)
-	if !strings.Contains(out, "- check: the guest must report its hostname") {
+	if !strings.Contains(out, "- check: 'the guest must report its hostname'") {
 		t.Errorf("render = %q, want the command check step", out)
 	}
 	if !strings.Contains(out, "command: 'uname -n | grep -q .'") {
