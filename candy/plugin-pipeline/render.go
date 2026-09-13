@@ -119,17 +119,27 @@ func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
 		if len(out) == 0 {
 			prefix = ""
 		}
-		out = append(out, prefix+"- check: "+what)
+		out = append(out, prefix+"- check: "+yamlScalar(what))
 		out = append(out, indent+"  id: behavior-"+itoa(i+1))
 		out = append(out, indent+"  context: [runtime]")
-		// YAML single-quote escaping: a quote inside a single-quoted scalar is
-		// DOUBLED (''), never shell-escaped ('\'' — that broke the rendered YAML).
-		out = append(out, indent+"  command: '"+strings.ReplaceAll(assertion, "'", "''")+"'")
+		out = append(out, indent+"  command: "+yamlScalar(assertion))
 	}
 	if len(out) == 0 {
 		return ""
 	}
 	return strings.Join(out, "\n")
+}
+
+// yamlScalar renders s as a single-quoted YAML scalar: embedded single quotes are
+// DOUBLED (”), and newlines are folded to spaces. A check's prose is arbitrary
+// authored text — a bare ": " (e.g. "declares `_watch: true`") made the rendered
+// bed invalid YAML, and because the bed-render validates the WHOLE project that
+// one bad bed failed EVERY concurrent lane (RCA 2026.256.2218).
+func yamlScalar(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "'", "''")
+	return "'" + s + "'"
 }
 
 func itoa(n int) string {
