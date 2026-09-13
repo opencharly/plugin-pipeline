@@ -258,14 +258,6 @@ func lastVerdict(msgs []chatMsg) string {
 	return ""
 }
 
-// runAgentStage: the plan agent stage. The stage's prompt is the SYSTEM
-// message; the USER message carries the stage id + the structured ledger facts
-// (the prior stage outputs — the agent never has to guess the evidence layout
-// to know what happened). The declared skill: refs are SKILL NAMES resolved
-// against the entity's skills.corpus; an unresolvable ref FAILS the stage
-// informatively (the decorative-ref era is gone). The reply is decoded by the
-// TYPED decoder against the declared outputs — a contract violation fails the
-// stage with the exact field + expected type (the redo signal is informed).
 // skillCorpus resolves the entity's skills.corpus to the directory holding
 // <skill-name>/SKILL.md. The corpus value is REF-RESOLVED ($env.NAME / $workdir /
 // ...) so a lane can point at a generated corpus outside its own tree (e.g.
@@ -282,6 +274,14 @@ func skillCorpus(rc *runCtx) string {
 	return corpus
 }
 
+// runAgentStage: the plan agent stage. The stage's prompt is the SYSTEM
+// message; the USER message carries the stage id + the structured ledger facts
+// (the prior stage outputs — the agent never has to guess the evidence layout
+// to know what happened). The declared skill: refs are SKILL NAMES resolved
+// against the entity's skills.corpus; an unresolvable ref FAILS the stage
+// informatively (the decorative-ref era is gone). The reply is decoded by the
+// TYPED decoder against the declared outputs — a contract violation fails the
+// stage with the exact field + expected type (the redo signal is informed).
 func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledger) (map[string]any, error) {
 	id := asString(raw["id"])
 	sys := asString(raw["prompt"])
