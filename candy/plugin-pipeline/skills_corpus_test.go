@@ -37,6 +37,20 @@ func TestSkillCorpus_RelativeLiteralJoinsWorkdir(t *testing.T) {
 	}
 }
 
+func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
+	wd := t.TempDir()
+	rc := &runCtx{
+		workdir: wd,
+		env:     map[string]string{},
+		skills:  map[string]any{"corpus": "$workdir/generated/skills"},
+	}
+	got := skillCorpus(rc)
+	want := filepath.Join(wd, "generated", "skills")
+	if got != want {
+		t.Fatalf("skillCorpus = %q, want %q (the $workdir ref must resolve)", got, want)
+	}
+}
+
 func TestSkillCorpus_AbsoluteLiteralUnchanged(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "corpus")
 	rc := &runCtx{workdir: t.TempDir(), env: map[string]string{}, skills: map[string]any{"corpus": abs}}
