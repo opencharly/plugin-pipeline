@@ -135,6 +135,10 @@ func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
 // authored text — a bare ": " (e.g. "declares `_watch: true`") made the rendered
 // bed invalid YAML, and because the bed-render validates the WHOLE project that
 // one bad bed failed EVERY concurrent lane (RCA 2026.256.2218).
+// RCA: this exact prose ("declares `_watch: true` …") in PR 10134 broke the
+// rendered bed at yaml line 31 and failed bed-render on lanes 10199/10212/
+// 10215/10228 — one bad prose string, validated project-wide, poisoned every
+// concurrent lane.
 func yamlScalar(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
