@@ -258,6 +258,22 @@ func lastVerdict(msgs []chatMsg) string {
 	return ""
 }
 
+// skillCorpus resolves the entity's skills.corpus to the directory holding
+// <skill-name>/SKILL.md. The corpus value is REF-RESOLVED ($env.NAME / $workdir /
+// ...) so a lane can point at a generated corpus outside its own tree (e.g.
+// $env.EVAL_UMBRELLA/marketplace/distros/skills) without a hard-coded path; a
+// relative result is then joined with the run workdir.
+func skillCorpus(rc *runCtx) string {
+	if rc == nil {
+		return ""
+	}
+	corpus := rc.resolveRefs(s(rc.skills["corpus"]))
+	if corpus != "" && !filepath.IsAbs(corpus) && rc.workdir != "" {
+		corpus = filepath.Join(rc.workdir, corpus)
+	}
+	return corpus
+}
+
 // runAgentStage: the plan agent stage. The stage's prompt is the SYSTEM
 // message; the USER message carries the stage id + the structured ledger facts
 // (the prior stage outputs — the agent never has to guess the evidence layout
@@ -276,10 +292,7 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	// A declared skill that does not resolve is a LANE DEFECT — the stage
 	// fails informatively instead of running the agent unskilled.
 	if rc != nil {
-		corpus := s(rc.skills["corpus"])
-		if corpus != "" && !filepath.IsAbs(corpus) && rc.workdir != "" {
-			corpus = filepath.Join(rc.workdir, corpus)
-		}
+		corpus := skillCorpus(rc)
 		for _, name := range strList(raw["skill"]) {
 			p := filepath.Join(corpus, name, "SKILL.md")
 			b, err := os.ReadFile(p)
