@@ -37,6 +37,8 @@ func TestSkillCorpus_RelativeLiteralJoinsWorkdir(t *testing.T) {
 	}
 }
 
+// The $workdir arm is one of the reference grammar's builtins; the corpus may
+// be expressed relative to the run workdir as well as to an $env var.
 func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
 	wd := t.TempDir()
 	rc := &runCtx{
