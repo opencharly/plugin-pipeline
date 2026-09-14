@@ -134,6 +134,35 @@ func TestGenerateMarkerYAML(t *testing.T) {
 	}
 }
 
+func TestGenerateMarkerIndent(t *testing.T) {
+	wd := t.TempDir()
+	body := "line one\nline two\n\nline four"
+	stage := params.Stage{
+		"id": "record", "kind": "generate",
+		"template": "report: |\n  ${body:indent}\n",
+		"vars":     map[string]any{"body": "@report.tests"},
+		"out":      wd + "/record.yml",
+	}
+	l := newLedger()
+	l.put(&StageResult{ID: "report", Kind: "agent", Status: "ok", Outputs: map[string]any{"tests": body}})
+	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(wd, "record.yml"))
+	var doc struct {
+		Report string `yaml:"report"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("rendered block scalar is not valid YAML: %v\n%s", err, string(b))
+	}
+	if doc.Report != body+"\n" {
+		// the YAML `|` literal block keeps its final newline — that is the
+		// contract, not a loss of structure.
+		t.Fatalf("the block scalar lost its structure:\n%q\nwant\n%q", doc.Report, body+"\n")
+	}
+}
+
 // --- the agent-stage committed-plan cache ------------------------------------
 //
 // On a freshness hit (the committed plan exists and its head equals the run's

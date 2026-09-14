@@ -66,6 +66,9 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 			if transform == "yaml" {
 				return renderYAMLBlock(val, origMarker, tmpl)
 			}
+			if transform == "indent" {
+				return indentContinuation(scalar(val), origMarker, tmpl)
+			}
 			if a, isArr := val.([]any); isArr && len(a) > 0 {
 				negate := negateAll || transform == "negate"
 				if block := renderCheckBlock(a, origMarker, tmpl, negate); block != "" {
@@ -175,6 +178,24 @@ func markerIndent(token, tmpl string) string {
 		}
 	}
 	return ""
+}
+
+// indentContinuation renders a multi-line string for a YAML block scalar: the
+// first line is unprefixed (the template's own marker line already positions it)
+// and every subsequent line is indented to the marker, so a prose block keeps its
+// internal structure instead of collapsing. Used for an eval record's report body.
+func indentContinuation(s, token, tmpl string) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= 1 {
+		return s
+	}
+	indent := markerIndent(token, tmpl)
+	for i := 1; i < len(lines); i++ {
+		if lines[i] != "" {
+			lines[i] = indent + lines[i]
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // yamlScalar renders s as a single-quoted YAML scalar: embedded single quotes are

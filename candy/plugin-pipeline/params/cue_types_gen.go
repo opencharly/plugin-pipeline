@@ -177,8 +177,9 @@ type AdeStage struct {
 
 // #GenerateStage: render an inline template to `out`. `negate_checks` negates
 // EVERY `checks` marker in the template. A per-marker transform (`${checks:negate}`,
-// `${checks:json}`) applies to that marker ALONE, so ONE template can render BOTH
-// the treatment bed and its negative-control twin into a single file.
+// `${checks:json}`, `${var:yaml}`, `${var:indent}`) applies to that marker ALONE,
+// so ONE template can render BOTH the treatment bed and its negative-control twin
+// (plus a structured record with an indented multi-line report) into a single file.
 type GenerateStage struct {
 	Kind string `json:"kind"`
 
