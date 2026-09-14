@@ -7,12 +7,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // render.go — the generate stage: render an INLINE template with typed vars and
 // write it to out; run the registered validator in-process (report-frontmatter).
+// A marker may carry a per-marker transform (`${var:negate}` / `${var:json}` /
+// `${var:yaml}`) applied to that marker alone, so ONE template renders a whole
+// record (both beds + the structured results).
 
-var tmplRe = regexp.MustCompile("\\$\\{[A-Za-z0-9_.]+\\}|\\$(pr|calver|workdir)|\\$env\\.([A-Z0-9_]+)|@[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)?")
+var tmplRe = regexp.MustCompile("\\$\\{[A-Za-z0-9_.]+(:[a-z]+)?\\}|\\$(pr|calver|workdir)|\\$env\\.([A-Z0-9_]+)|@[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)?")
 
 func (rc *runCtx) runGenerate(raw map[string]any) error {
 	tmpl := s(raw["template"])
@@ -32,11 +37,22 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	if !filepath.IsAbs(out) {
 		out = filepath.Join(rc.workdir, out)
 	}
+	negateAll := negateChecks(raw)
 	rendered := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		// @github.com/... refs are CANDY references, never stage outputs:
 		// never substitute them (the @-grammar would otherwise eat the prefix).
 		if strings.HasPrefix(m, "@github") {
 			return m
+		}
+		// the per-marker transform: ${var:negate} / ${var:json} / ${var:yaml}.
+		// Applied to THIS marker alone (the stage-level negate_checks applies to
+		// ALL), so ONE template can render both the treatment bed and its
+		// negative control. `origMarker` keeps the full token for indent lookup.
+		origMarker := m
+		transform := ""
+		if i := strings.LastIndex(m, ":"); i >= 0 {
+			transform = strings.TrimSuffix(m[i+1:], "}")
+			m = m[:i] + "}"
 		}
 		key := strings.Trim(m, "${}@")
 		if v, ok := vars[key]; ok {
@@ -44,8 +60,15 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 			if val == nil {
 				return "" // nil vars render as empty (a skip plan has no checks), never \"null\"
 			}
+			if transform == "json" {
+				return jsonStr(val)
+			}
+			if transform == "yaml" {
+				return renderYAMLBlock(val, origMarker, tmpl)
+			}
 			if a, isArr := val.([]any); isArr && len(a) > 0 {
-				if block := renderCheckBlock(a, m, tmpl, negateChecks(raw)); block != "" {
+				negate := negateAll || transform == "negate"
+				if block := renderCheckBlock(a, origMarker, tmpl, negate); block != "" {
 					return block
 				}
 			}
@@ -86,14 +109,7 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 // prose emission ("verify with:", "no grader bound" SKIPs) is GONE (hard
 // cutover, R5). Indentation comes from the marker line.
 func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
-	lines := strings.Split(tmpl, "\n")
-	indent := "              "
-	for _, l := range lines {
-		if strings.Contains(l, token) {
-			indent = l[:strings.Index(l, token)]
-			break
-		}
-	}
+	indent := markerIndent(token, tmpl)
 	out := []string{}
 	for i, item := range a {
 		m, _ := item.(map[string]any)
@@ -128,6 +144,37 @@ func renderCheckBlock(a []any, token, tmpl string, negate bool) string {
 		return ""
 	}
 	return strings.Join(out, "\n")
+}
+
+// renderYAMLBlock renders a structured value (a nested map/list) as a YAML block
+// indented to the marker — the record-building counterpart of renderCheckBlock,
+// so an eval record carries structured oracle/eval results without inline JSON.
+// The first line is unprefixed (the marker line's own whitespace prefixes it).
+func renderYAMLBlock(val any, token, tmpl string) string {
+	b, err := yaml.Marshal(val)
+	if err != nil {
+		return scalar(val)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	indent := markerIndent(token, tmpl)
+	for i := 1; i < len(lines); i++ {
+		lines[i] = indent + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// markerIndent: the whitespace preceding the token on its own template line (the
+// block continuation indent).
+func markerIndent(token, tmpl string) string {
+	for _, l := range strings.Split(tmpl, "\n") {
+		if i := strings.Index(l, token); i >= 0 {
+			return l[:i]
+		}
+	}
+	return ""
 }
 
 // yamlScalar renders s as a single-quoted YAML scalar: embedded single quotes are

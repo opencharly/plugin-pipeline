@@ -31,17 +31,36 @@
 // renders the contract into the prompt mechanically and validates the reply
 // against it at decode. skill: refs are SKILL NAMES in the entity's
 // skills.corpus.
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: { [string]: #OutputType }, max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string }
+//
+// `cache` makes the agent's OUTPUT a COMMITTED ARTIFACT keyed by freshness: on a
+// hit (the file exists and its key_field equals `key`) the declared outputs are
+// READ from the file and the agent never runs; on a miss the agent runs normally.
+// That is the render-once-per-<key> primitive a lane needs to reuse a committed
+// plan (e.g. per pr@sha) instead of re-authoring it every run.
+#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: { [string]: #OutputType }, max_turns?: int & >0, redo?: #RedoSpec, skip_when?: string, cache?: #CacheSpec }
+#CacheSpec: {
+	path:       string  // ref-resolved path to the committed plan artifact (YAML)
+	key:        string  // ref-resolved freshness value (e.g. $env.PR_HEAD_SHA)
+	key_field?: string  // the file field compared to key (default "head")
+	source?:    string  // the sub-tree whose fields ARE the outputs (default: top level)
+}
 #OutputType: {
 	type: "string" | "int" | "bool" | "enum" | "string_list" | "object"
 	enum?: [...string]      // type: "enum" — the allowed values
 	description?: string    // rendered into the prompt contract
 }
 #ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec, skip_when?: string }
+// #ProbeStage outputs: the probe's VALUE spreads as named outputs when it is a
+// map (e.g. ledger_gate -> executed_checks/control_ok/media_ok/eval_steps/
+// control_steps); a scalar value is exposed under the output named in `outputs`.
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
 // agent-check: steps, graded by the live agent in the venue via the SDK.
 #AdeStage:     { kind: "ade",     id: string, bed: string, fail_on?: [...string], redo?: #RedoSpec, skip_when?: string }
+// #GenerateStage: render an inline template to `out`. `negate_checks` negates
+// EVERY `checks` marker in the template. A per-marker transform (`${checks:negate}`,
+// `${checks:json}`) applies to that marker ALONE, so ONE template can render BOTH
+// the treatment bed and its negative-control twin into a single file.
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
