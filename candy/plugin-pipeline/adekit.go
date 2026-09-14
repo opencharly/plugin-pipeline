@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/opencharly/sdk"
@@ -40,36 +39,34 @@ func (v *kitVerbs) RunProvisionAct(ctx context.Context, op *spec.Op, verb string
 	return v.RunVerb(ctx, op)
 }
 
-// bedPlanOps parses the rendered bed's charly.yml and returns its plan steps as
-// spec.Op values (the check steps' fields map directly onto the Op: the
-// command/stdout/eventually/retry_interval/context/id + the assert intent).
+// bedPlanOps parses the named bed entity out of the project's discovered
+// charly.yml files and returns its plan steps as spec.Op values (the check
+// steps' fields map directly onto the Op: the command/stdout/eventually/
+// retry_interval/context/id + the assert intent).
+//
+// The bed is resolved BY ENTITY NAME (the loader's own discovery) — never from a
+// hardcoded `pr-beds/` layout (the layout is the lane's choice). The entity body
+// is NAME-FIRST (`<bed>: { vm: { plan: [...] } }`), so the plan is nested under
+// the kind key; parsing only a flat top-level `plan:` read ZERO ops and reported
+// a vacuous PASS (RCA: the flat-shape fixture never matched a real bed).
 func bedPlanOps(workdir, pr, bed string) ([]spec.Op, error) {
 	if bed == "" {
 		bed = "check-omarchy-pr-" + pr + "-vm"
 	}
-	bedFile := filepath.Join(workdir, "pr-beds", "pr-"+pr, "charly.yml")
-	if strings.HasSuffix(bed, "-control") {
-		bedFile = filepath.Join(workdir, "pr-beds", "pr-"+pr+"-control", "charly.yml")
-	}
-	if _, err := os.Stat(bedFile); err != nil {
-		if found := findBedEntity(workdir, bed); found != "" {
-			bedFile = found
-		} else {
-			return nil, err
-		}
+	bedFile := findBedEntity(workdir, bed)
+	if bedFile == "" {
+		return nil, fmt.Errorf("ade: bed entity %q not found under %s", bed, workdir)
 	}
 	raw, err := os.ReadFile(bedFile)
 	if err != nil {
 		return nil, err
 	}
-	var doc struct {
-		Plan []map[string]any `yaml:"plan"`
-	}
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	plan, err := entityPlan(raw, bed)
+	if err != nil {
 		return nil, err
 	}
-	ops := make([]spec.Op, 0, len(doc.Plan))
-	for _, step := range doc.Plan {
+	ops := make([]spec.Op, 0, len(plan))
+	for _, step := range plan {
 		op := spec.Op{IntentDo: string(spec.DoAssert)}
 		if v, ok := step["id"].(string); ok {
 			op.ID = v
@@ -98,16 +95,52 @@ func bedPlanOps(workdir, pr, bed string) ([]spec.Op, error) {
 			}
 		}
 		// the check verb's name (the "check:" value) is the step's description
-		for k, v := range step {
-			if k == "check" {
-				if s, ok := v.(string); ok {
-					op.Description = s
-				}
-			}
+		if v, ok := step["check"].(string); ok {
+			op.Description = v
 		}
 		ops = append(ops, op)
 	}
 	return ops, nil
+}
+
+// entityPlan extracts the `plan:` step list from a NAME-FIRST entity body:
+// `<bed>: { <kind>: { plan: [...] } }` (vm/local/pod/...). The kind key is any
+// single child holding a `plan`; a legacy flat `plan:` at the top level is also
+// accepted so the helper is shape-tolerant without a hardcoded bed layout. The
+// document may carry scalar top-level keys (e.g. `version:`), so the top level
+// decodes as map[string]any, not map[string]map[string]any.
+func entityPlan(raw []byte, name string) ([]map[string]any, error) {
+	var top map[string]any
+	if err := yaml.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	body, ok := top[name].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("ade: entity %q not found in the bed file", name)
+	}
+	// name-first: the plan lives under the entity's single kind key.
+	for _, v := range body {
+		if m, ok := v.(map[string]any); ok {
+			if p, ok := m["plan"].([]any); ok {
+				return planRows(p), nil
+			}
+		}
+	}
+	// legacy/top-level fallback.
+	if p, ok := body["plan"].([]any); ok {
+		return planRows(p), nil
+	}
+	return nil, nil
+}
+
+func planRows(p []any) []map[string]any {
+	out := make([]map[string]any, 0, len(p))
+	for _, e := range p {
+		if m, ok := e.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // runAdeBedKit drives the rendered bed's plan in-process and maps the results to

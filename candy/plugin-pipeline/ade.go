@@ -76,18 +76,10 @@ func adeVerdict(ctx context.Context, pr, bed, workdir string) (string, string, e
 	if bed == "" {
 		bed = "check-omarchy-pr-" + pr + "-vm"
 	}
-	bedFile := filepath.Join(workdir, "pr-beds", "pr-"+pr, "charly.yml")
-	if strings.HasSuffix(bed, "-control") {
-		bedFile = filepath.Join(workdir, "pr-beds", "pr-"+pr+"-control", "charly.yml")
-	}
-	if _, err := os.Stat(bedFile); err != nil {
-		// the by-name fallback (plan §2.1): resolve ANY existing check-bed entity
-		// from the project's discovered files (the imports' check-bed entities).
-		if found := findBedEntity(workdir, bed); found != "" {
-			bedFile = found
-		} else {
-			return "NO_VALIDATION", "ade: rendered bed missing: " + bedFile, err
-		}
+	// the bed is resolved BY ENTITY NAME (the loader's own discovery) — never a
+	// hardcoded `pr-beds/` layout (the layout belongs to the lane).
+	if findBedEntity(workdir, bed) == "" {
+		return "NO_VALIDATION", "ade: bed entity missing: " + bed, fmt.Errorf("ade: bed entity %q not found under %s", bed, workdir)
 	}
 	verdict, summary, code, err := runAdeBed(ctx, pr, bed, workdir)
 	if err != nil {
