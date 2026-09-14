@@ -56,7 +56,35 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(out, []byte(rendered), 0o644); err != nil {
+	// ATOMIC write (unique temp + rename in the same dir). Many lanes render
+	// beds into the shared pr-beds/ tree concurrently, and every `charly check
+	// run` loads the WHOLE project. A plain os.WriteFile truncates in place, so
+	// a sibling lane's project load can observe a 0-byte/partial bed, lose the
+	// entity and fail with "no entity" (RCA 2026.257: the 16-lane batch's ~10
+	// SETUP_DEFECTs). Rename is atomic on POSIX: a reader sees either the old
+	// file or the complete new one, never a torn one. os.CreateTemp gives each
+	// render a UNIQUE temp (safe even for same-path writers), and the ".tmp-"
+	// suffix keeps it out of the project's charly.yml discover.
+	f, err := os.CreateTemp(filepath.Dir(out), filepath.Base(out)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+	}
+	_ = f.Chmod(0o644)
+	if _, err := f.WriteString(rendered); err != nil {
+		cleanup()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, out); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	if v := s(raw["validate"]); v != "" {
