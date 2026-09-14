@@ -163,6 +163,33 @@ func TestGenerateMarkerIndent(t *testing.T) {
 	}
 }
 
+func TestGenerateMarkerBullets(t *testing.T) {
+	wd := t.TempDir()
+	sugg := []any{"do X", "fix Y"}
+	stage := params.Stage{
+		"id": "record", "kind": "generate",
+		"template": "report: |\n  ## Suggestions\n  ${s:bullets}\n",
+		"vars":     map[string]any{"s": "@cold.suggestions"},
+		"out":      wd + "/record.yml",
+	}
+	l := newLedger()
+	l.put(&StageResult{ID: "cold", Kind: "agent", Status: "ok", Outputs: map[string]any{"suggestions": sugg}})
+	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(wd, "record.yml"))
+	var doc struct {
+		Report string `yaml:"report"`
+	}
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("not valid YAML: %v\n%s", err, string(b))
+	}
+	if !strings.Contains(doc.Report, "- do X\n") || !strings.Contains(doc.Report, "- fix Y") {
+		t.Fatalf("bullets not rendered:\n%s", doc.Report)
+	}
+}
+
 // --- the agent-stage committed-plan cache ------------------------------------
 //
 // On a freshness hit (the committed plan exists and its head equals the run's

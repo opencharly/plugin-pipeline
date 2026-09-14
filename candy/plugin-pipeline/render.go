@@ -69,6 +69,9 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 			if transform == "indent" {
 				return indentContinuation(scalar(val), origMarker, tmpl)
 			}
+			if transform == "bullets" {
+				return bulletsBlock(val, origMarker, tmpl)
+			}
 			if a, isArr := val.([]any); isArr && len(a) > 0 {
 				negate := negateAll || transform == "negate"
 				if block := renderCheckBlock(a, origMarker, tmpl, negate); block != "" {
@@ -196,6 +199,29 @@ func indentContinuation(s, token, tmpl string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// bulletsBlock renders a string list as markdown bullets, one per line, with the
+// continuation lines indented to the marker (the first line unprefixed). A
+// single-valued list is the common case for an eval record's suggestions.
+func bulletsBlock(val any, token, tmpl string) string {
+	items := ss(val)
+	if len(items) == 0 {
+		// a bare string (not a list) still renders as one bullet.
+		if s := scalar(val); s != "" {
+			items = []string{s}
+		}
+	}
+	if len(items) == 0 {
+		return ""
+	}
+	indent := markerIndent(token, tmpl)
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, "- "+it)
+	}
+	body := strings.Join(out, "\n"+indent)
+	return body
 }
 
 // yamlScalar renders s as a single-quoted YAML scalar: embedded single quotes are
