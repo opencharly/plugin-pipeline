@@ -105,10 +105,12 @@ func bedPlanOps(workdir, pr, bed string) ([]spec.Op, error) {
 
 // entityPlan extracts the `plan:` step list from a NAME-FIRST entity body:
 // `<bed>: { <kind>: { plan: [...] } }` (vm/local/pod/...). The kind key is any
-// single child holding a `plan`; a legacy flat `plan:` at the top level is also
-// accepted so the helper is shape-tolerant without a hardcoded bed layout. The
-// document may carry scalar top-level keys (e.g. `version:`), so the top level
-// decodes as map[string]any, not map[string]map[string]any.
+// single child holding a `plan`.
+//
+// An entity that EXISTS but carries no plan steps is a HARD error, never a nil
+// plan: a zero-op bed would map to a vacuous `PASS code=0` in runAdeBedKit —
+// exactly the silent-success class this fix removes. The legacy flat top-level
+// `plan:` shape is NOT supported (it never matched a real bed; R5).
 func entityPlan(raw []byte, name string) ([]map[string]any, error) {
 	var top map[string]any
 	if err := yaml.Unmarshal(raw, &top); err != nil {
@@ -118,19 +120,18 @@ func entityPlan(raw []byte, name string) ([]map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("ade: entity %q not found in the bed file", name)
 	}
-	// name-first: the plan lives under the entity's single kind key.
 	for _, v := range body {
 		if m, ok := v.(map[string]any); ok {
 			if p, ok := m["plan"].([]any); ok {
-				return planRows(p), nil
+				rows := planRows(p)
+				if len(rows) == 0 {
+					return nil, fmt.Errorf("ade: entity %q has an empty plan — a zero-op bed is a vacuous PASS", name)
+				}
+				return rows, nil
 			}
 		}
 	}
-	// legacy/top-level fallback.
-	if p, ok := body["plan"].([]any); ok {
-		return planRows(p), nil
-	}
-	return nil, nil
+	return nil, fmt.Errorf("ade: entity %q has no plan: steps (a zero-op bed is a vacuous PASS)", name)
 }
 
 func planRows(p []any) []map[string]any {

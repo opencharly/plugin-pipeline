@@ -190,6 +190,43 @@ func TestGenerateMarkerBullets(t *testing.T) {
 	}
 }
 
+// An UNKNOWN transform must hard-error, never silently render the unchanged
+// value (a `:negte` typo would otherwise make the control an exact copy of the
+// treatment — a vacuous assertion-integrity proof).
+func TestGenerateUnknownTransformErrors(t *testing.T) {
+	wd := t.TempDir()
+	checks := []any{map[string]any{"id": "c1", "what": "w", "assertion": "test -f /x"}}
+	stage := params.Stage{
+		"id": "g", "kind": "generate",
+		"template": "plan:\n  ${checks:negte}\n",
+		"vars":     map[string]any{"checks": "@triage.checks"},
+		"out":      wd + "/o.yml",
+	}
+	l := newLedger()
+	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"checks": checks}})
+	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "generate", "g", stage, l); err == nil {
+		t.Fatal("an unknown marker transform must error, not render a silent no-op")
+	}
+}
+
+// :negate on a non-list marker has no negation semantics — it must error.
+func TestGenerateNegateOnNonListErrors(t *testing.T) {
+	wd := t.TempDir()
+	stage := params.Stage{
+		"id": "g", "kind": "generate",
+		"template": "x: ${v:negate}\n",
+		"vars":     map[string]any{"v": "@triage.what"},
+		"out":      wd + "/o.yml",
+	}
+	l := newLedger()
+	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"what": "a string"}})
+	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "generate", "g", stage, l); err == nil {
+		t.Fatal(":negate on a non-list must error")
+	}
+}
+
 // --- the agent-stage committed-plan cache ------------------------------------
 //
 // On a freshness hit (the committed plan exists and its head equals the run's
@@ -251,6 +288,53 @@ func TestAgentCacheMissOnNewHead(t *testing.T) {
 	_, hit2, err2 := readAgentCache(rc2, stage)
 	if err2 != nil || hit2 {
 		t.Fatalf("missing plan must MISS cleanly: hit=%v err=%v", hit2, err2)
+	}
+}
+
+// A cache hit whose committed plan MISSES a declared output must ERROR — never
+// return ok with the output silently absent (which would render an empty bed var).
+func TestAgentCacheHitMissingOutputErrors(t *testing.T) {
+	wd := t.TempDir()
+	// valid YAML, matching head, but no `golden` field.
+	if err := os.WriteFile(filepath.Join(wd, "eval.yml"), []byte("head: abc123\nclass: system\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := map[string]any{
+		"cache": map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"},
+		"outputs": map[string]any{
+			"class":  map[string]any{"type": "string"},
+			"golden": map[string]any{"type": "string"},
+		},
+	}
+	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	_, hit, err := readAgentCache(rc, stage)
+	if err == nil || hit {
+		t.Fatalf("a partial committed plan must error (hit=%v err=%v)", hit, err)
+	}
+}
+
+// A cache hit whose committed value violates its declared #OutputType must ERROR.
+func TestAgentCacheHitBadTypeErrors(t *testing.T) {
+	wd := t.TempDir()
+	// `tests` is declared string_list but the plan carries a bare string.
+	if err := os.WriteFile(filepath.Join(wd, "eval.yml"), []byte("head: abc123\ntests: nope\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := map[string]any{
+		"cache":   map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"},
+		"outputs": map[string]any{"tests": map[string]any{"type": "string_list"}},
+	}
+	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	if _, hit, err := readAgentCache(rc, stage); err == nil || hit {
+		t.Fatalf("a bad-typed cached value must error (hit=%v err=%v)", hit, err)
+	}
+}
+
+// A nil run context with a cache block must MISS cleanly, never panic.
+func TestAgentCacheNilCtxMisses(t *testing.T) {
+	stage := map[string]any{"cache": map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"}}
+	if _, hit, err := readAgentCache(nil, stage); err != nil || hit {
+		t.Fatalf("nil rc must miss cleanly (hit=%v err=%v)", hit, err)
 	}
 }
 

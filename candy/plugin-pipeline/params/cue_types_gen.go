@@ -176,10 +176,12 @@ type AdeStage struct {
 }
 
 // #GenerateStage: render an inline template to `out`. `negate_checks` negates
-// EVERY `checks` marker in the template. A per-marker transform (`${checks:negate}`,
-// `${checks:json}`, `${var:yaml}`, `${var:indent}`) applies to that marker ALONE,
-// so ONE template can render BOTH the treatment bed and its negative-control twin
-// (plus a structured record with an indented multi-line report) into a single file.
+// EVERY `checks` marker in the template. A per-marker transform
+// (`${checks:negate}`, `${checks:json}`, `${var:yaml}`, `${var:indent}`,
+// `${var:bullets}`) applies to that marker ALONE, so ONE template can render BOTH
+// the treatment bed and its negative-control twin (plus a structured record with
+// an indented multi-line report and bullet lists) into a single file. An unknown
+// transform is a HARD error — never a silent no-op.
 type GenerateStage struct {
 	Kind string `json:"kind"`
 

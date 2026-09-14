@@ -19,6 +19,11 @@ import (
 
 var tmplRe = regexp.MustCompile("\\$\\{[A-Za-z0-9_.]+(:[a-z]+)?\\}|\\$(pr|calver|workdir)|\\$env\\.([A-Z0-9_]+)|@[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)?")
 
+// validTransforms: the closed set of per-marker transforms. An unknown transform
+// is a hard generate error (never a silent no-op — a `:negte` typo must not
+// render the treatment copy as the negative control).
+var validTransforms = map[string]bool{"negate": true, "json": true, "yaml": true, "indent": true, "bullets": true}
+
 func (rc *runCtx) runGenerate(raw map[string]any) error {
 	tmpl := s(raw["template"])
 	if ref := s(raw["template"]); strings.HasPrefix(ref, "$report.") {
@@ -38,21 +43,33 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 		out = filepath.Join(rc.workdir, out)
 	}
 	negateAll := negateChecks(raw)
+	var renderErr error
 	rendered := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if renderErr != nil {
+			return m
+		}
 		// @github.com/... refs are CANDY references, never stage outputs:
 		// never substitute them (the @-grammar would otherwise eat the prefix).
 		if strings.HasPrefix(m, "@github") {
 			return m
 		}
-		// the per-marker transform: ${var:negate} / ${var:json} / ${var:yaml}.
-		// Applied to THIS marker alone (the stage-level negate_checks applies to
-		// ALL), so ONE template can render both the treatment bed and its
-		// negative control. `origMarker` keeps the full token for indent lookup.
+		// the per-marker transform: ${var:negate} / ${var:json} / ${var:yaml} /
+		// ${var:indent} / ${var:bullets}. Applied to THIS marker alone (the
+		// stage-level negate_checks applies to ALL), so ONE template can render
+		// both the treatment bed and its negative control. `origMarker` keeps the
+		// full token for indent lookup. An UNKNOWN transform is a hard error — a
+		// typo (`:negte`) must never silently render the treatment copy as the
+		// control (a vacuous assertion-integrity proof).
 		origMarker := m
 		transform := ""
 		if i := strings.LastIndex(m, ":"); i >= 0 {
 			transform = strings.TrimSuffix(m[i+1:], "}")
 			m = m[:i] + "}"
+		}
+		if transform != "" && !validTransforms[transform] {
+			renderErr = errString("generate: unknown marker transform :" + transform +
+				" (valid: negate, json, yaml, indent, bullets)")
+			return m
 		}
 		key := strings.Trim(m, "${}@")
 		if v, ok := vars[key]; ok {
@@ -77,11 +94,19 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 				if block := renderCheckBlock(a, origMarker, tmpl, negate); block != "" {
 					return block
 				}
+			} else if transform == "negate" {
+				// :negate on a non-array has no negation semantics — error rather
+				// than emit the value unchanged (a silent no-op transform).
+				renderErr = errString("generate: :negate applied to a non-list marker " + origMarker)
+				return m
 			}
 			return scalar(val)
 		}
 		return rc.resolveRefs(m)
 	})
+	if renderErr != nil {
+		return renderErr
+	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}

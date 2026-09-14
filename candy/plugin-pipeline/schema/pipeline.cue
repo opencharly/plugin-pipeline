@@ -58,10 +58,12 @@
 // agent-check: steps, graded by the live agent in the venue via the SDK.
 #AdeStage:     { kind: "ade",     id: string, bed: string, fail_on?: [...string], redo?: #RedoSpec, skip_when?: string }
 // #GenerateStage: render an inline template to `out`. `negate_checks` negates
-// EVERY `checks` marker in the template. A per-marker transform (`${checks:negate}`,
-// `${checks:json}`, `${var:yaml}`, `${var:indent}`) applies to that marker ALONE,
-// so ONE template can render BOTH the treatment bed and its negative-control twin
-// (plus a structured record with an indented multi-line report) into a single file.
+// EVERY `checks` marker in the template. A per-marker transform
+// (`${checks:negate}`, `${checks:json}`, `${var:yaml}`, `${var:indent}`,
+// `${var:bullets}`) applies to that marker ALONE, so ONE template can render BOTH
+// the treatment bed and its negative-control twin (plus a structured record with
+// an indented multi-line report and bullet lists) into a single file. An unknown
+// transform is a HARD error — never a silent no-op.
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }

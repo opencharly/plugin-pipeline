@@ -82,6 +82,27 @@ func TestBedPlanOps_MissingEntityFails(t *testing.T) {
 	}
 }
 
+// TestBedPlanOps_PlanlessEntityFails: an entity that EXISTS but carries no plan
+// steps must be a hard error — a zero-op bed maps to a vacuous PASS code=0.
+func TestBedPlanOps_PlanlessEntityFails(t *testing.T) {
+	dir := t.TempDir()
+	bed := filepath.Join(dir, "eval", "pr-9", "charly.yml")
+	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		"check-omarchy-pr-9-vm:\n  vm:\n    from: golden\n", // no plan key
+		"check-omarchy-pr-9-vm:\n  vm:\n    plan: []\n",     // empty plan
+	} {
+		if err := os.WriteFile(bed, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := bedPlanOps(dir, "9", "check-omarchy-pr-9-vm"); err == nil {
+			t.Fatalf("a plan-less entity must be an error, not a zero-op PASS:\n%s", body)
+		}
+	}
+}
+
 // TestRunAdeBedKit_NilExecutorMapsToFail is the B12 coverage for the verdict
 // mapping: a nil host executor (the un-compiled placement's guard) yields
 // handled fail results, so the drive reports FAIL rather than crashing.
