@@ -338,7 +338,60 @@ func TestAgentCacheNilCtxMisses(t *testing.T) {
 	}
 }
 
-// --- the ledger_gate media-min single source ---------------------------------
+// --- the ledger_gate step parser + media-min single source -------------------
+//
+// The parser behind ledger_gate's executed_checks/eval_steps. It must read the
+// SAME canonical source countExecutedSteps uses, classify ok/fail/skip, exclude
+// the recording loop (rec-*), and be surfaced by the probe value.
+func TestBedStepOutcomes(t *testing.T) {
+	wd := t.TempDir()
+	dir := filepath.Join(wd, ".check", "check-omarchy-pr-7-vm", "2026.257.1200")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	log := "" +
+		"  PASS  check apply PR 7 via the seam  [pr-apply]  exit=0\n" +
+		"  PASS  check the config declares the key  [behavior-1]  exit=0\n" +
+		"  FAIL  check the widget answers  [behavior-2]  exit=1\n" +
+		"  SKIP  check a hw step  [behavior-3]  exit=0\n" +
+		"  PASS  check start a terminal recording  [rec-start]  exit=0\n" +
+		"  PASS  check drive the PR  [rec-drive]  exit=0\n" +
+		"  not a step line at all\n"
+	if err := os.WriteFile(filepath.Join(dir, "check-live.log"), []byte(log), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rc := &runCtx{workdir: wd}
+	rows := bedStepOutcomes(rc, "check-omarchy-pr-7-vm")
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want 4 (the 2 rec-* steps excluded): %+v", len(rows), rows)
+	}
+	want := []struct{ id, status string }{
+		{"pr-apply", "ok"}, {"behavior-1", "ok"}, {"behavior-2", "fail"}, {"behavior-3", "skip"},
+	}
+	for i, w := range want {
+		if rows[i]["id"] != w.id || rows[i]["status"] != w.status {
+			t.Errorf("row %d = %+v, want id=%s status=%s", i, rows[i], w.id, w.status)
+		}
+	}
+	// executed_checks counts ok+fail (skips are not executions), via the ONE parser.
+	if n := countExecutedSteps(rc, "check-omarchy-pr-7-vm"); n != 3 {
+		t.Fatalf("countExecutedSteps = %d, want 3 (ok+fail)", n)
+	}
+	// the probe value carries the rows for the record stage.
+	_, _, val := probeLedgerGate(map[string]any{
+		"bed_name": "check-omarchy-pr-7-vm", "control_bed_name": "check-omarchy-pr-7-control",
+	}, rc)
+	m, _ := val.(map[string]any)
+	if m == nil {
+		t.Fatalf("probe value is not a map: %#v", val)
+	}
+	if _, ok := m["eval_steps"].([]map[string]any); !ok {
+		t.Fatalf("eval_steps missing/!rows: %#v", m["eval_steps"])
+	}
+	if _, ok := m["control_steps"]; !ok {
+		t.Fatalf("control_steps missing: %#v", m)
+	}
+}
 
 func TestMediaGateSpecUsesPipelineMin(t *testing.T) {
 	rc := &runCtx{media: map[string]any{
