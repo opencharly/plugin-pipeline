@@ -268,9 +268,13 @@ func TestMediaGateSpecUsesPipelineMin(t *testing.T) {
 	if mins["cast"] != 7 || mins["mp4"] != 9 {
 		t.Fatalf("mins = %v (the pipeline media.min must win)", mins)
 	}
-	// no run context: the built-in defaults still cover every file.
+	// no run context: the built-in defaults still cover every file, with the
+	// EXACT engine values (mp4 4096 pinned so a silent loosening cannot recur).
 	defFiles, defMins := (&runCtx{}).mediaGateSpec()
 	if len(defFiles) != 5 || defMins["mp4"] == nil {
 		t.Fatalf("defaults = %v %v", defFiles, defMins)
+	}
+	if defMins["mp4"] != 4096 || defMins["cast"] != 200 || defMins["gif"] != 1024 || defMins["mjpeg"] != 4096 || defMins["png"] != 1024 {
+		t.Fatalf("engine default min sizes changed: %v", defMins)
 	}
 }

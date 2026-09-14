@@ -146,11 +146,13 @@ func runProbe(word string, input map[string]any) (bool, string) {
 }
 
 // mediaGateSpec: the media-gate file list + min sizes from the pipeline's
-// media.min (the ONE source), falling back to the built-in defaults for a
-// standalone/legacy call with no run context.
+// media.min (the authoritative source when present), falling back to the
+// engine's built-in defaults for a standalone/legacy call with no run context.
+// The fallback values are UNCHANGED from the pre-unification inline table — the
+// entity's media.min is what overrides them (never a silent engine change).
 func (rc *runCtx) mediaGateSpec() (files []any, mins map[string]any) {
 	defFiles := []string{"cast", "gif", "mjpeg", "mp4", "png"}
-	defMin := map[string]int{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 512, "png": 1024}
+	defMin := map[string]int{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 4096, "png": 1024}
 	src := defFiles
 	minMap := map[string]any{}
 	if rc != nil && rc.media != nil {
