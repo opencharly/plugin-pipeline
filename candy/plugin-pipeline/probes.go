@@ -145,6 +145,42 @@ func runProbe(word string, input map[string]any) (bool, string) {
 	return ok, msg
 }
 
+// mediaGateSpec: the media-gate file list + min sizes from the pipeline's
+// media.min (the authoritative source when present), falling back to the
+// engine's built-in defaults for a standalone/legacy call with no run context.
+// The fallback values are UNCHANGED from the pre-unification inline table — the
+// entity's media.min is what overrides them (never a silent engine change).
+func (rc *runCtx) mediaGateSpec() (files []any, mins map[string]any) {
+	defFiles := []string{"cast", "gif", "mjpeg", "mp4", "png"}
+	defMin := map[string]int{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 4096, "png": 1024}
+	src := defFiles
+	minMap := map[string]any{}
+	if rc != nil && rc.media != nil {
+		if f := ss(rc.media["files"]); len(f) > 0 {
+			src = f
+		}
+		if m := mm(rc.media["min"]); len(m) > 0 {
+			for k, v := range defMin {
+				minMap[k] = v
+			}
+			for k, v := range m {
+				minMap[k] = i(v)
+			}
+		}
+	}
+	if len(minMap) == 0 {
+		for k, v := range defMin {
+			minMap[k] = v
+		}
+	}
+	files = make([]any, 0, len(src))
+	for _, f := range src {
+		files = append(files, f)
+	}
+	return files, minMap
+}
+
+// probeMediaGate: the media artifacts exist with the min sizes.
 func probeMediaGate(input map[string]any, rc *runCtx) (bool, string) {
 	dir := s(input["dir"])
 	files := ss(input["files"])
@@ -381,14 +417,24 @@ func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
 	controlOK := controlPassed(rc, controlBed)
 	mediaOK := true
 	if mediaDir != "" {
-		ok, msg := probeMediaGate(map[string]any{"dir": mediaDir, "files": []any{"cast", "gif", "mjpeg", "mp4", "png"}, "min": map[string]any{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 4096, "png": 1024}}, rc)
+		// the min sizes come from the pipeline's media.min (the ONE media-gate
+		// source, R3) when present; the built-in map is the fallback for a
+		// standalone/legacy call. Never two drifting min tables.
+		files, mins := rc.mediaGateSpec()
+		ok, msg := probeMediaGate(map[string]any{"dir": mediaDir, "files": files, "min": mins}, rc)
 		mediaOK = ok
 		if !ok {
 			return false, "ledger_gate: media gate: " + msg, nil
 		}
 	}
 	corpusRun, corpusOK, corpusSkipped := corpusFacts(rc, bed, input["corpus_file"])
-	val := map[string]any{"executed_checks": executed, "control_ok": controlOK, "media_ok": mediaOK, "corpus_run": corpusRun, "corpus_ok": corpusOK, "corpus_skipped": corpusSkipped}
+	// the structured per-step outcomes (the ONE canonical reader) — carried in
+	// the probe value so a record stage renders them without re-parsing logs.
+	val := map[string]any{
+		"executed_checks": executed, "control_ok": controlOK, "media_ok": mediaOK,
+		"corpus_run": corpusRun, "corpus_ok": corpusOK, "corpus_skipped": corpusSkipped,
+		"eval_steps": bedStepOutcomes(rc, bed), "control_steps": bedStepOutcomes(rc, controlBed),
+	}
 	if executed == 0 {
 		return false, "ledger_gate: zero executed checks in the eval run — the eval verified nothing (SETUP_DEFECT, never a publish)", val
 	}
@@ -466,10 +512,26 @@ func corpusFacts(rc *runCtx, bed string, corpusFile any) (run, okCount, skipped 
 // top-level summary.yml carries only the phase steps: vm-build/vm-create/
 // deploy-add/check-live — the 952-era confusion, now resolved).
 func countExecutedSteps(rc *runCtx, bed string) int {
+	n := 0
+	for _, st := range bedStepOutcomes(rc, bed) {
+		if st["status"] == "ok" || st["status"] == "fail" {
+			n++
+		}
+	}
+	return n
+}
+
+// bedStepOutcomes: the structured per-step outcomes of a bed's LATEST run, read
+// from the ONE canonical source (the check-live phase log — the same parser
+// countExecutedSteps uses; a second reader would be an R3 violation). Rows are
+// [{id, name, status}] with status ok|fail|skip; the recording loop (rec-*) is
+// excluded (media presence is never verification). A probe output carries these
+// so the eval record needs no re-parse of logs.
+func bedStepOutcomes(rc *runCtx, bed string) []map[string]any {
 	base := filepath.Join(rc.workdir, ".check", bed)
 	entries, err := os.ReadDir(base)
 	if err != nil {
-		return 0
+		return nil
 	}
 	latest := ""
 	for _, e := range entries {
@@ -478,27 +540,40 @@ func countExecutedSteps(rc *runCtx, bed string) int {
 		}
 	}
 	if latest == "" {
-		return 0
+		return nil
 	}
 	b, err := os.ReadFile(filepath.Join(base, latest, "check-live.log"))
 	if err != nil {
-		return 0
+		return nil
 	}
-	n := 0
+	idRe := regexp.MustCompile(`\[([a-z0-9-]+)\]`)
+	var out []map[string]any
 	for _, line := range strings.Split(string(b), "\n") {
 		// "  PASS  check apply PR ... [pr-apply]  exit=0" / "  FAIL  check ..."
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "PASS  check ") && !strings.HasPrefix(trimmed, "FAIL  check ") {
+		var status string
+		switch {
+		case strings.HasPrefix(trimmed, "PASS  check "):
+			status = "ok"
+		case strings.HasPrefix(trimmed, "FAIL  check "):
+			status = "fail"
+		case strings.HasPrefix(trimmed, "SKIP  check "):
+			status = "skip"
+		default:
 			continue
 		}
-		// exclude the recording loop (the rec-* steps) — media presence never
-		// implies verification.
-		if regexp.MustCompile(`\[rec-[a-z-]+\]`).FindString(trimmed) != "" {
+		m := idRe.FindStringSubmatch(trimmed)
+		if m == nil {
 			continue
 		}
-		n++
+		id := m[1]
+		if strings.HasPrefix(id, "rec-") {
+			continue // the recording loop is not a verification step
+		}
+		name := strings.TrimSpace(strings.SplitN(strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(trimmed, "PASS  "), "FAIL  "), "SKIP  "), "[", 2)[0])
+		out = append(out, map[string]any{"id": id, "name": name, "status": status})
 	}
-	return n
+	return out
 }
 
 // controlPassed: the control bed's latest run passed completely.

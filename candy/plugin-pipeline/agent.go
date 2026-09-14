@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // P1 — the bare agent runtime: a direct chat-completions call with a fully
@@ -284,6 +286,16 @@ func skillCorpus(rc *runCtx) string {
 // stage with the exact field + expected type (the redo signal is informed).
 func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledger) (map[string]any, error) {
 	id := asString(raw["id"])
+	// the COMMITTED-plan cache: on a freshness hit the declared outputs are READ
+	// from the artifact and the agent NEVER runs — the render-once-per-<key>
+	// primitive (e.g. per pr@sha) that reuses a committed plan instead of
+	// re-authoring it every run. A miss falls through to the normal authoring.
+	if out, hit, err := readAgentCache(rc, raw); err != nil {
+		return map[string]any{}, err
+	} else if hit {
+		fmt.Printf("[agent %s] cache hit — outputs read from the committed plan (agent not run)\n", id)
+		return out, nil
+	}
 	sys := asString(raw["prompt"])
 	if rc != nil {
 		sys = rc.resolveRefs(sys)
@@ -348,6 +360,72 @@ type redoError struct {
 
 func (e *redoError) Error() string { return e.msg }
 
+// readAgentCache evaluates the agent stage's `cache:` block: a freshness hit
+// reads the declared outputs from the committed plan artifact (source), keyed by
+// the file's key_field vs the ref-resolved key. A miss (no cache block, missing
+// file, or stale key) returns hit=false and the agent authors normally. A
+// present-but-corrupt plan is an error — never a silent re-author — and a hit
+// whose committed plan is MISSING a declared output is an error too (a partial
+// plan must never render as an empty/nil bed var). Cached values are validated
+// against the declared #OutputType, exactly like an agent reply.
+func readAgentCache(rc *runCtx, raw map[string]any) (map[string]any, bool, error) {
+	spec, _ := raw["cache"].(map[string]any)
+	if len(spec) == 0 {
+		return nil, false, nil
+	}
+	if rc == nil {
+		// no run context (the standalone CLI path): a cache block cannot resolve
+		// its refs — treat as a miss rather than panicking on a nil rc.
+		return nil, false, nil
+	}
+	path := rc.resolveRefs(s(spec["path"]))
+	key := rc.resolveRefs(s(spec["key"]))
+	keyField := s(spec["key_field"])
+	if keyField == "" {
+		keyField = "head"
+	}
+	source := s(spec["source"])
+	if path == "" || key == "" {
+		return nil, false, fmt.Errorf("agent cache: path + key required")
+	}
+	if !filepath.IsAbs(path) && rc.workdir != "" {
+		path = filepath.Join(rc.workdir, path)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, nil // no committed plan yet — author fresh
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		return nil, false, fmt.Errorf("agent cache %s: unreadable committed plan: %w", path, err)
+	}
+	if got := s(doc[keyField]); got != key {
+		return nil, false, nil // a stale plan (new head) — author fresh
+	}
+	fields := doc
+	if source != "" {
+		m, _ := doc[source].(map[string]any)
+		if m == nil {
+			return nil, false, fmt.Errorf("agent cache %s: source %q is not a mapping", path, source)
+		}
+		fields = m
+	}
+	out := map[string]any{"response": "(cache hit: " + path + ")", "cache_hit": true}
+	declared, _ := raw["outputs"].(map[string]any)
+	for name, spec := range declared {
+		v, ok := fields[name]
+		if !ok {
+			return nil, false, fmt.Errorf("agent cache %s: the committed plan is missing the declared output %q", path, name)
+		}
+		vv, err := validateTypedValue(v, name, spec)
+		if err != nil {
+			return nil, false, fmt.Errorf("agent cache %s: output %q: %w", path, name, err)
+		}
+		out[name] = vv
+	}
+	return out, true, nil
+}
+
 // decodeTypedOutput: extract one declared output from the agent's reply (ONE
 // JSON object, fence-tolerant) and validate it against the #OutputType spec.
 // The quote-unaware extractJSON scanner is GONE — this is the one canonical
@@ -361,6 +439,13 @@ func decodeTypedOutput(resp, name string, spec any) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("the reply has no %q field (the declared output contract)", name)
 	}
+	return validateTypedValue(val, name, spec)
+}
+
+// validateTypedValue: validate ONE value against the declared #OutputType spec
+// and normalize it. Shared by the agent-reply decoder and the cache-hit reader,
+// so a committed plan is held to the SAME contract as a live reply (R3).
+func validateTypedValue(val any, name string, spec any) (any, error) {
 	m, _ := spec.(map[string]any)
 	typ := s(m["type"])
 	if typ == "" {

@@ -83,6 +83,12 @@ type Stage map[string]any
 // renders the contract into the prompt mechanically and validates the reply
 // against it at decode. skill: refs are SKILL NAMES in the entity's
 // skills.corpus.
+//
+// `cache` makes the agent's OUTPUT a COMMITTED ARTIFACT keyed by freshness: on a
+// hit (the file exists and its key_field equals `key`) the declared outputs are
+// READ from the file and the agent never runs; on a miss the agent runs normally.
+// That is the render-once-per-<key> primitive a lane needs to reuse a committed
+// plan (e.g. per pr@sha) instead of re-authoring it every run.
 type AgentStage struct {
 	Kind string `json:"kind"`
 
@@ -101,6 +107,8 @@ type AgentStage struct {
 	Redo RedoSpec `json:"redo,omitempty"`
 
 	Skip_when string `json:"skip_when,omitempty"`
+
+	Cache CacheSpec `json:"cache,omitempty"`
 }
 
 type OutputType struct {
@@ -121,6 +129,16 @@ type RedoSpec struct {
 	Escalate_after int64 `json:"escalate_after,omitempty"`
 }
 
+type CacheSpec struct {
+	Path string `json:"path"`
+
+	Key string `json:"key"`
+
+	Key_field string `json:"key_field,omitempty"`
+
+	Source string `json:"source,omitempty"`
+}
+
 type ProbeStage struct {
 	Kind string `json:"kind"`
 
@@ -137,6 +155,9 @@ type ProbeStage struct {
 	Skip_when string `json:"skip_when,omitempty"`
 }
 
+// #ProbeStage outputs: the probe's VALUE spreads as named outputs when it is a
+// map (e.g. ledger_gate -> executed_checks/control_ok/media_ok/eval_steps/
+// control_steps); a scalar value is exposed under the output named in `outputs`.
 // #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
 // agent-check: steps, graded by the live agent in the venue via the SDK.
@@ -154,6 +175,13 @@ type AdeStage struct {
 	Skip_when string `json:"skip_when,omitempty"`
 }
 
+// #GenerateStage: render an inline template to `out`. `negate_checks` negates
+// EVERY `checks` marker in the template. A per-marker transform
+// (`${checks:negate}`, `${checks:json}`, `${var:yaml}`, `${var:indent}`,
+// `${var:bullets}`) applies to that marker ALONE, so ONE template can render BOTH
+// the treatment bed and its negative-control twin (plus a structured record with
+// an indented multi-line report and bullet lists) into a single file. An unknown
+// transform is a HARD error — never a silent no-op.
 type GenerateStage struct {
 	Kind string `json:"kind"`
 
