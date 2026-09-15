@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -200,16 +201,18 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 		return chatMsg{}, fmt.Errorf("LLM %d: %s", resp.StatusCode, truncate(string(raw), 300))
 	}
 
-	// Idle watchdog: cancel the READ (not the whole call) when no chunk has
-	// arrived for chatIdleTimeout. A streaming response is a live connection;
-	// the watchdog re-arms on every line.
+	// Idle watchdog: when no chunk has arrived for chatIdleTimeout, CLOSE THE
+	// RESPONSE BODY. A blocked `scanner.Scan()` reads from resp.Body, and a
+	// context cancellation does NOT interrupt an in-flight Read on it (the
+	// request's own context is the parent ctx here) — so the ONLY way to unblock
+	// the scan from another goroutine is to close the body, which makes Read
+	// return immediately. The watchdog re-arms on every chunk, so a model that
+	// keeps emitting is never interrupted; only genuine silence trips it.
 	idle := chatIdleTimeout()
-	readCtx, cancelRead := context.WithCancel(ctx)
-	defer cancelRead()
-	var idleTripped bool
+	var idleTripped atomic.Bool
 	watchdog := time.AfterFunc(idle, func() {
-		idleTripped = true
-		cancelRead()
+		idleTripped.Store(true)
+		_ = resp.Body.Close()
 	})
 	defer watchdog.Stop()
 
@@ -274,13 +277,17 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 			}
 		}
 	}
-	if err := scanner.Err(); err != nil && !idleTripped {
+	// A close-from-watchdog surfaces as a scanner error (read on a closed body).
+	// Distinguish the IDLE trip from a genuine transport error via the atomic flag.
+	if tripped := idleTripped.Load(); tripped {
+		if contentSB.Len() == 0 && maxIdx < 0 {
+			return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
+		}
+		// Partial output before the stall is still usable — fall through and
+		// return what arrived rather than discarding a mostly-complete turn.
+	} else if err := scanner.Err(); err != nil {
 		return chatMsg{}, err
 	}
-	if idleTripped && contentSB.Len() == 0 && maxIdx < 0 {
-		return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
-	}
-	_ = readCtx
 
 	var contentPtr *string
 	if contentSB.Len() > 0 {

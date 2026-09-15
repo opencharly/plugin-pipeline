@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
@@ -113,3 +115,41 @@ func TestChatStreamsAndAssemblesToolCalls(t *testing.T) {
 }
 
 func strptr(s string) *string { return &s }
+
+// TestChatIdleWatchdogBoundsAStall pins the IDLE bound: a provider that streams
+// NO chunks past EVAL_LLM_IDLE_TIMEOUT must fail in bounded time with the stall
+// error, not block until the caller's ctx fires. FAILS without the watchdog
+// (the call would hang) and validates that closing the body actually unblocks
+// the scanner (the fix for the inert-context defect).
+func TestChatIdleWatchdogBoundsAStall(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("Content-Type", "text/event-stream")
+		rw.WriteHeader(http.StatusOK)
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Stream NOTHING (no chunks) until the test releases the handler — the
+		// stall case. Without the idle watchdog the client blocks here forever.
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	t.Setenv("EVAL_LLM_MODEL", "mock")
+	t.Setenv("EVAL_LLM_IDLE_TIMEOUT", "150ms")
+
+	start := time.Now()
+	_, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("a stalled stream must fail, got nil error")
+	}
+	if !strings.Contains(err.Error(), "stream stalled") {
+		t.Fatalf("want the stall error, got: %v", err)
+	}
+	// Bounded: well under the 10s the handler would otherwise hold.
+	if elapsed > 5*time.Second {
+		t.Fatalf("idle watchdog did not bound the stall: %s", elapsed)
+	}
+}
