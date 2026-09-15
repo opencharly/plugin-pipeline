@@ -118,9 +118,12 @@ func strptr(s string) *string { return &s }
 
 // TestChatIdleWatchdogBoundsAStall pins the IDLE bound: a provider that streams
 // NO chunks past EVAL_LLM_IDLE_TIMEOUT must fail in bounded time with the stall
-// error, not block until the caller's ctx fires. FAILS without the watchdog
-// (the call would hang) and validates that closing the body actually unblocks
-// the scanner (the fix for the inert-context defect).
+// error, not block until the caller's ctx fires. It validates the mechanism the
+// fix uses — the watchdog CANCELS the request's context, and the Transport's
+// ctx-done teardown makes the blocked body Read return. (It does NOT close the
+// body: resp.Body.Close() from another goroutine blocks behind the in-flight
+// Read in net/http and would unblock nothing.) Mutation-verified: an inert
+// watchdog makes this test HANG.
 func TestChatIdleWatchdogBoundsAStall(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
