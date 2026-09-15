@@ -177,7 +177,26 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 	if err != nil {
 		return chatMsg{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
+
+	// The request rides a CANCELLABLE CHILD of the caller's ctx, and the IDLE
+	// watchdog CANCELS it. This is the mechanism that actually bounds a stalled
+	// stream: http.Transport cancels the request on ctx-done by tearing the
+	// connection DOWN, which makes the blocked resp.Body.Read return an error.
+	// (resp.Body.Close() does NOT work here — in net/http, bodyEOFSignal.Read
+	// holds es.mu across the blocking read and bodyEOFSignal.Close blocks on that
+	// same mutex, so a Close from the watchdog just queues behind the in-flight
+	// Read and unblocks nothing. Validator-caught; see the stall test.)
+	idle := chatIdleTimeout()
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+	var idleTripped atomic.Bool
+	watchdog := time.AfterFunc(idle, func() {
+		idleTripped.Store(true)
+		cancelRead()
+	})
+	defer watchdog.Stop()
+
+	req, err := http.NewRequestWithContext(readCtx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return chatMsg{}, err
 	}
@@ -189,10 +208,14 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 	req.Header.Set("HTTP-Referer", "https://github.com/opencharly/plugin-pipeline")
 	req.Header.Set("X-Title", "plugin-pipeline")
 	// No http.Client.Timeout (that would be a whole-generation deadline again):
-	// the request is bounded by ctx (the caller's) and by the IDLE watchdog below.
+	// the request is bounded by readCtx — the caller's ctx plus the IDLE watchdog
+	// that cancels it on a chunk gap.
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		if idleTripped.Load() {
+			return chatMsg{}, fmt.Errorf("LLM stream stalled: no response for %s (provider unreachable or silent); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
+		}
 		return chatMsg{}, err
 	}
 	defer resp.Body.Close()
@@ -200,21 +223,6 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		return chatMsg{}, fmt.Errorf("LLM %d: %s", resp.StatusCode, truncate(string(raw), 300))
 	}
-
-	// Idle watchdog: when no chunk has arrived for chatIdleTimeout, CLOSE THE
-	// RESPONSE BODY. A blocked `scanner.Scan()` reads from resp.Body, and a
-	// context cancellation does NOT interrupt an in-flight Read on it (the
-	// request's own context is the parent ctx here) — so the ONLY way to unblock
-	// the scan from another goroutine is to close the body, which makes Read
-	// return immediately. The watchdog re-arms on every chunk, so a model that
-	// keeps emitting is never interrupted; only genuine silence trips it.
-	idle := chatIdleTimeout()
-	var idleTripped atomic.Bool
-	watchdog := time.AfterFunc(idle, func() {
-		idleTripped.Store(true)
-		_ = resp.Body.Close()
-	})
-	defer watchdog.Stop()
 
 	var (
 		contentSB strings.Builder
@@ -277,18 +285,21 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 			}
 		}
 	}
-	// A close-from-watchdog surfaces as a scanner error (read on a closed body).
-	// Distinguish the IDLE trip from a genuine transport error via the atomic flag.
-	if tripped := idleTripped.Load(); tripped {
-		if contentSB.Len() == 0 && maxIdx < 0 {
-			return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
-		}
-		// Partial output before the stall is still usable — fall through and
-		// return what arrived rather than discarding a mostly-complete turn.
-	} else if err := scanner.Err(); err != nil {
+	// The watchdog cancels readCtx, which the Transport turns into a body-read
+	// error; distinguish that IDLE trip from a genuine transport error via the
+	// atomic flag. A stall is NEVER silent (R1): even a partial turn is an ERROR,
+	// because a truncated completion must not be mistaken for a finished one.
+	if idleTripped.Load() {
+		return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s after %d byte(s) of content and %d tool call(s) (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint",
+			idle, contentSB.Len(), len(toolCalls))
+	}
+	if err := scanner.Err(); err != nil {
 		return chatMsg{}, err
 	}
-
+	// A stream that ended with NEITHER content NOR tool calls (a 200 with an empty
+	// completion, e.g. a filtered turn) is not a usable assistant message — fail
+	// rather than return an empty turn that downstream renders as nothing. This is
+	// the streaming-form equivalent of the removed `len(cr.Choices) == 0` guard.
 	var contentPtr *string
 	if contentSB.Len() > 0 {
 		s := contentSB.String()
@@ -299,6 +310,9 @@ func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (
 		if tc := toolCalls[i]; tc != nil {
 			calls = append(calls, *tc)
 		}
+	}
+	if contentPtr == nil && len(calls) == 0 {
+		return chatMsg{}, fmt.Errorf("LLM: empty completion (no content, no tool calls)")
 	}
 	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string {
 		if contentPtr != nil {
