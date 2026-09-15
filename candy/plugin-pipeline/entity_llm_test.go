@@ -5,7 +5,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
@@ -18,10 +20,7 @@ func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
 		(*seen)["path"] = req.URL.Path
 		(*seen)["model"] = parsed.Model
 		(*seen)["auth"] = req.Header.Get("Authorization")
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"content": "ok"}}},
-		})
+		writeSSEContent(rw, "ok")
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -75,5 +74,85 @@ func TestLLMDefaultModel(t *testing.T) {
 	}
 	if got := llmBaseURL(nil); got != "http://localhost:11434/v1" {
 		t.Errorf("llmBaseURL default: got %q, want http://localhost:11434/v1", got)
+	}
+}
+
+// TestChatStreamsAndAssemblesToolCalls pins the STREAMING contract: chat() must
+// set stream:true, read SSE deltas, and assemble a tool call from index-keyed
+// delta fragments (id/name in the first, arguments in the second).
+//
+// This is the fix for the whole-generation 5-minute deadline that guillotined a
+// slow-but-progressing reasoning model ("context deadline exceeded while awaiting
+// headers" on a NON-streaming request). A non-streaming mock would make this
+// test's SSE payload read as zero chunks and the call would stall-fail — so the
+// test FAILS if chat() reverts to a non-streaming request.
+func TestChatStreamsAndAssemblesToolCalls(t *testing.T) {
+	var sawStream bool
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		var cr chatRequest
+		_ = json.NewDecoder(req.Body).Decode(&cr)
+		sawStream = cr.Stream
+		writeSSEToolCall(rw, "call_1", "run_outcomes", `{"bed":"check-x"}`)
+	}))
+	defer srv.Close()
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	t.Setenv("EVAL_LLM_MODEL", "mock")
+
+	msg, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if !sawStream {
+		t.Fatal("chat must send stream:true — the idle bound requires SSE")
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("tool calls: got %d, want 1 (assembled from SSE deltas)", len(msg.ToolCalls))
+	}
+	tc := msg.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Function.Name != "run_outcomes" || tc.Function.Arguments != `{"bed":"check-x"}` {
+		t.Errorf("assembled tool call = %+v, want id/name/args from the delta fragments", tc)
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+// TestChatIdleWatchdogBoundsAStall pins the IDLE bound: a provider that streams
+// NO chunks past EVAL_LLM_IDLE_TIMEOUT must fail in bounded time with the stall
+// error, not block until the caller's ctx fires. It validates the mechanism the
+// fix uses — the watchdog CANCELS the request's context, and the Transport's
+// ctx-done teardown makes the blocked body Read return. (It does NOT close the
+// body: resp.Body.Close() from another goroutine blocks behind the in-flight
+// Read in net/http and would unblock nothing.) Mutation-verified: an inert
+// watchdog makes this test HANG.
+func TestChatIdleWatchdogBoundsAStall(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		rw.Header().Set("Content-Type", "text/event-stream")
+		rw.WriteHeader(http.StatusOK)
+		if f, ok := rw.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Stream NOTHING (no chunks) until the test releases the handler — the
+		// stall case. Without the idle watchdog the client blocks here forever.
+		<-release
+	}))
+	defer srv.Close()
+	defer close(release)
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	t.Setenv("EVAL_LLM_MODEL", "mock")
+	t.Setenv("EVAL_LLM_IDLE_TIMEOUT", "150ms")
+
+	start := time.Now()
+	_, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("a stalled stream must fail, got nil error")
+	}
+	if !strings.Contains(err.Error(), "stream stalled") {
+		t.Fatalf("want the stall error, got: %v", err)
+	}
+	// Bounded: well under the 10s the handler would otherwise hold.
+	if elapsed > 5*time.Second {
+		t.Fatalf("idle watchdog did not bound the stall: %s", elapsed)
 	}
 }

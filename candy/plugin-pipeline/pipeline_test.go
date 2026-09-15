@@ -108,11 +108,10 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 		if len(cr.Tools) == 0 {
 			t.Errorf("tools not attached")
 		}
-		resp := map[string]any{"choices": []any{map[string]any{
-			"message": map[string]any{"content": "ok"},
-		}}}
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(resp)
+		if !cr.Stream {
+			t.Errorf("the agent call must set stream:true (the idle bound requires SSE)")
+		}
+		writeSSEContent(rw, "ok")
 	}))
 	defer srv.Close()
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)

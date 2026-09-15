@@ -1,6 +1,7 @@
 package pluginpipeline
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -49,6 +51,10 @@ type chatRequest struct {
 	Temperature float64      `json:"temperature"`
 	Tools       []toolSchema `json:"tools,omitempty"`
 	ToolChoice  string       `json:"tool_choice,omitempty"`
+	// Stream requests SSE (`stream: true`) so response headers arrive at once and
+	// chunks flow as the model produces — the precondition for an IDLE bound
+	// instead of a whole-generation deadline.
+	Stream bool `json:"stream,omitempty"`
 }
 type chatResponse struct {
 	Choices []struct {
@@ -132,46 +138,189 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
+// defaultChatIdleTimeout bounds how long a STREAMING completion may go with NO
+// chunk before it is treated as stalled. This is an IDLE bound, not a
+// whole-generation deadline: a slow reasoning model that keeps emitting
+// (reasoning deltas, tool-call deltas) is making progress and is never cut off,
+// while a provider that has genuinely gone silent fails in bounded time.
+//
+// The predecessor here was `http.Client{Timeout: 5 * time.Minute}` on a
+// NON-streaming request — a whole-generation deadline, so a large/slow
+// generation was guillotined at 5 minutes with `context deadline exceeded
+// (Client.Timeout exceeded while awaiting headers)` even though the provider was
+// still working. That is the SAME defect class the org's pr-validator workflow
+// RCA'd for plugin-review (non-streaming request under a whole-generation
+// deadline); the remedy is the same: stream, and bound the idle gap.
+//
+// Overridable via EVAL_LLM_IDLE_TIMEOUT (any Go duration, e.g. "10m"); the
+// operator can raise it for an unusually slow endpoint.
+func chatIdleTimeout() time.Duration {
+	if v := os.Getenv("EVAL_LLM_IDLE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 3 * time.Minute
+}
+
+// chat issues ONE streaming chat-completions call and assembles the assistant
+// message from the SSE deltas.
+//
+// Streaming is LOAD-BEARING, not an optimization: with `stream: true` the
+// response headers arrive immediately and chunks flow as the model produces, so
+// the bound can be an IDLE bound (no chunk for chatIdleTimeout) instead of a
+// whole-generation deadline. Content deltas and tool-call deltas (assembled by
+// index — the OpenAI SSE shape) both count as progress.
 func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (chatMsg, error) {
-	body, err := json.Marshal(chatRequest{Model: llmModel(rc), Messages: msgs, Temperature: 0.2, Tools: tools, ToolChoice: "auto"})
+	reqBody := chatRequest{Model: llmModel(rc), Messages: msgs, Temperature: 0.2, Tools: tools, ToolChoice: "auto", Stream: true}
+	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return chatMsg{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
+
+	// The request rides a CANCELLABLE CHILD of the caller's ctx, and the IDLE
+	// watchdog CANCELS it. This is the mechanism that actually bounds a stalled
+	// stream: http.Transport cancels the request on ctx-done by tearing the
+	// connection DOWN, which makes the blocked resp.Body.Read return an error.
+	// (resp.Body.Close() does NOT work here — in net/http, bodyEOFSignal.Read
+	// holds es.mu across the blocking read and bodyEOFSignal.Close blocks on that
+	// same mutex, so a Close from the watchdog just queues behind the in-flight
+	// Read and unblocks nothing. Validator-caught; see the stall test.)
+	idle := chatIdleTimeout()
+	readCtx, cancelRead := context.WithCancel(ctx)
+	defer cancelRead()
+	var idleTripped atomic.Bool
+	watchdog := time.AfterFunc(idle, func() {
+		idleTripped.Store(true)
+		cancelRead()
+	})
+	defer watchdog.Stop()
+
+	req, err := http.NewRequestWithContext(readCtx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return chatMsg{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
 	if k := llmAPIKey(rc); k != "" {
 		req.Header.Set("Authorization", "Bearer "+k)
 	}
 	req.Header.Set("HTTP-Referer", "https://github.com/opencharly/plugin-pipeline")
 	req.Header.Set("X-Title", "plugin-pipeline")
-	client := &http.Client{Timeout: 5 * time.Minute}
+	// No http.Client.Timeout (that would be a whole-generation deadline again):
+	// the request is bounded by readCtx — the caller's ctx plus the IDLE watchdog
+	// that cancels it on a chunk gap.
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
+		if idleTripped.Load() {
+			return chatMsg{}, fmt.Errorf("LLM stream stalled: no response for %s (provider unreachable or silent); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
+		}
 		return chatMsg{}, err
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 		return chatMsg{}, fmt.Errorf("LLM %d: %s", resp.StatusCode, truncate(string(raw), 300))
 	}
-	var cr chatResponse
-	if err := json.Unmarshal(raw, &cr); err != nil {
+
+	var (
+		contentSB strings.Builder
+		toolCalls = map[int]*toolCall{} // assembled by index (OpenAI SSE)
+		maxIdx    = -1
+	)
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 8<<20))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	for scanner.Scan() {
+		watchdog.Reset(idle) // progress: a chunk arrived
+		line := strings.TrimSpace(scanner.Text())
+		const prefix = "data:"
+		if !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		if payload == "[DONE]" {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content   *string `json:"content"`
+					ToolCalls []struct {
+						Index    int    `json:"index"`
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue // a non-JSON keepalive/comment line is not fatal
+		}
+		for _, ch := range chunk.Choices {
+			if ch.Delta.Content != nil {
+				contentSB.WriteString(*ch.Delta.Content)
+			}
+			for _, tc := range ch.Delta.ToolCalls {
+				cur := toolCalls[tc.Index]
+				if cur == nil {
+					cur = &toolCall{}
+					toolCalls[tc.Index] = cur
+				}
+				if tc.ID != "" {
+					cur.ID = tc.ID
+				}
+				if tc.Type != "" {
+					cur.Type = tc.Type
+				}
+				cur.Function.Name += tc.Function.Name
+				cur.Function.Arguments += tc.Function.Arguments
+				if tc.Index > maxIdx {
+					maxIdx = tc.Index
+				}
+			}
+		}
+	}
+	// The watchdog cancels readCtx, which the Transport turns into a body-read
+	// error; distinguish that IDLE trip from a genuine transport error via the
+	// atomic flag. A stall is NEVER silent (R1): even a partial turn is an ERROR,
+	// because a truncated completion must not be mistaken for a finished one.
+	if idleTripped.Load() {
+		return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s after %d byte(s) of content and %d tool call(s) (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint",
+			idle, contentSB.Len(), len(toolCalls))
+	}
+	if err := scanner.Err(); err != nil {
 		return chatMsg{}, err
 	}
-	if len(cr.Choices) == 0 {
-		return chatMsg{}, fmt.Errorf("LLM: no choices")
+	// A stream that ended with NEITHER content NOR tool calls (a 200 with an empty
+	// completion, e.g. a filtered turn) is not a usable assistant message — fail
+	// rather than return an empty turn that downstream renders as nothing. This is
+	// the streaming-form equivalent of the removed `len(cr.Choices) == 0` guard.
+	var contentPtr *string
+	if contentSB.Len() > 0 {
+		s := contentSB.String()
+		contentPtr = &s
 	}
-	m := cr.Choices[0].Message
+	var calls []toolCall
+	for i := 0; i <= maxIdx; i++ {
+		if tc := toolCalls[i]; tc != nil {
+			calls = append(calls, *tc)
+		}
+	}
+	if contentPtr == nil && len(calls) == 0 {
+		return chatMsg{}, fmt.Errorf("LLM: empty completion (no content, no tool calls)")
+	}
 	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string {
-		if m.Content != nil {
-			return *m.Content
+		if contentPtr != nil {
+			return *contentPtr
 		}
 		return ""
-	}(), 120), len(m.ToolCalls))
-	return chatMsg{Role: "assistant", Content: m.Content, ToolCalls: m.ToolCalls}, nil
+	}(), 120), len(calls))
+	return chatMsg{Role: "assistant", Content: contentPtr, ToolCalls: calls}, nil
 }
 
 func truncate(s string, n int) string {
