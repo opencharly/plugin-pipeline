@@ -18,10 +18,7 @@ func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
 		(*seen)["path"] = req.URL.Path
 		(*seen)["model"] = parsed.Model
 		(*seen)["auth"] = req.Header.Get("Authorization")
-		rw.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(rw).Encode(map[string]any{
-			"choices": []any{map[string]any{"message": map[string]any{"content": "ok"}}},
-		})
+		writeSSEContent(rw, "ok")
 	}))
 	t.Cleanup(srv.Close)
 	return srv
@@ -77,3 +74,42 @@ func TestLLMDefaultModel(t *testing.T) {
 		t.Errorf("llmBaseURL default: got %q, want http://localhost:11434/v1", got)
 	}
 }
+
+// TestChatStreamsAndAssemblesToolCalls pins the STREAMING contract: chat() must
+// set stream:true, read SSE deltas, and assemble a tool call from index-keyed
+// delta fragments (id/name in the first, arguments in the second).
+//
+// This is the fix for the whole-generation 5-minute deadline that guillotined a
+// slow-but-progressing reasoning model ("context deadline exceeded while awaiting
+// headers" on a NON-streaming request). A non-streaming mock would make this
+// test's SSE payload read as zero chunks and the call would stall-fail — so the
+// test FAILS if chat() reverts to a non-streaming request.
+func TestChatStreamsAndAssemblesToolCalls(t *testing.T) {
+	var sawStream bool
+	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
+		var cr chatRequest
+		_ = json.NewDecoder(req.Body).Decode(&cr)
+		sawStream = cr.Stream
+		writeSSEToolCall(rw, "call_1", "run_outcomes", `{"bed":"check-x"}`)
+	}))
+	defer srv.Close()
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	t.Setenv("EVAL_LLM_MODEL", "mock")
+
+	msg, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	if err != nil {
+		t.Fatalf("chat: %v", err)
+	}
+	if !sawStream {
+		t.Fatal("chat must send stream:true — the idle bound requires SSE")
+	}
+	if len(msg.ToolCalls) != 1 {
+		t.Fatalf("tool calls: got %d, want 1 (assembled from SSE deltas)", len(msg.ToolCalls))
+	}
+	tc := msg.ToolCalls[0]
+	if tc.ID != "call_1" || tc.Function.Name != "run_outcomes" || tc.Function.Arguments != `{"bed":"check-x"}` {
+		t.Errorf("assembled tool call = %+v, want id/name/args from the delta fragments", tc)
+	}
+}
+
+func strptr(s string) *string { return &s }
