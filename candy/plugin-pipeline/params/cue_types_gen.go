@@ -4,33 +4,33 @@ package params
 
 // The kind:pipeline ENTITY body (a declared plan).
 type PipelineInput struct {
-	Version int64 `yaml:"version,omitempty" json:"version,omitempty"`
+	Version int64 `json:"version,omitempty"`
 
-	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
+	Repo string `json:"repo,omitempty"`
 
-	Gates []string `yaml:"gates,omitempty" json:"gates,omitempty"`
+	Gates []string `json:"gates,omitempty"`
 
 	Redo struct {
-		Max int64 `yaml:"max,omitempty" json:"max,omitempty"`
+		Max int64 `json:"max,omitempty"`
 
-		Escalate_after int64 `yaml:"escalate_after,omitempty" json:"escalate_after,omitempty"`
-	} `yaml:"redo,omitempty" json:"redo,omitempty"`
+		Escalate_after int64 `json:"escalate_after,omitempty"`
+	} `json:"redo,omitempty"`
 
 	Concurrency struct {
-		Lanes int64 `yaml:"lanes,omitempty" json:"lanes,omitempty"`
-	} `yaml:"concurrency,omitempty" json:"concurrency,omitempty"`
+		Lanes int64 `json:"lanes,omitempty"`
+	} `json:"concurrency,omitempty"`
 
 	Channels map[string]struct {
-		Golden string `yaml:"golden,omitempty" json:"golden"`
+		Golden string `json:"golden"`
 
-		Provision string `yaml:"provision,omitempty" json:"provision"`
-	} `yaml:"channels,omitempty" json:"channels,omitempty"`
+		Provision string `json:"provision"`
+	} `json:"channels,omitempty"`
 
-	Llm LLMSpec `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Llm LLMSpec `json:"llm,omitempty"`
 
-	Media MediaSpec `yaml:"media,omitempty" json:"media,omitempty"`
+	Media MediaSpec `json:"media,omitempty"`
 
-	Report ReportSpec `yaml:"report,omitempty" json:"report,omitempty"`
+	Report ReportSpec `json:"report,omitempty"`
 
 	// skills: the agent-stage skill corpus. corpus is a dir holding
 	// <skill-name>/SKILL.md; it is REF-RESOLVED ($env.NAME / $workdir / ...)
@@ -40,10 +40,10 @@ type PipelineInput struct {
 	// names a skill in this corpus. An unresolvable ref FAILS the stage
 	// informatively — the decorative-ref era is gone.
 	Skills struct {
-		Corpus string `yaml:"corpus,omitempty" json:"corpus"`
-	} `yaml:"skills,omitempty" json:"skills,omitempty"`
+		Corpus string `json:"corpus"`
+	} `json:"skills,omitempty"`
 
-	Stages []Stage `yaml:"stages,omitempty" json:"stages"`
+	Stages []Stage `json:"stages"`
 }
 
 // ── The LLM surface (the OpenAI-compatible API) ─────────────────────────────
@@ -75,37 +75,37 @@ type PipelineInput struct {
 type LLMSpec struct {
 	// base_url: the OpenAI-compatible endpoint root INCLUDING the /v1 suffix
 	// (e.g. http://localhost:11434/v1). The engine appends /chat/completions.
-	Base_url string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	Base_url string `json:"base_url,omitempty"`
 
 	// model: the model identifier sent in the request (e.g. deepseek-v4.1-flash:cloud).
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 
 	// api_key: bearer credential; empty/absent => NO auth header is sent.
-	Api_key string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Api_key string `json:"api_key,omitempty"`
 
 	// organization / project: sent as the OpenAI-Organization / OpenAI-Project
 	// headers for a multi-org key.
-	Organization string `yaml:"organization,omitempty" json:"organization,omitempty"`
+	Organization string `json:"organization,omitempty"`
 
-	Project string `yaml:"project,omitempty" json:"project,omitempty"`
+	Project string `json:"project,omitempty"`
 
 	// timeout: a Go duration bounding the WHOLE request (e.g. "10m"). Empty
 	// means no whole-request deadline — the idle_timeout is the bound instead.
-	Timeout string `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Timeout string `json:"timeout,omitempty"`
 
 	// idle_timeout: a Go duration bounding the gap BETWEEN streaming chunks.
 	// This is the primary liveness bound: a slow-but-progressing generation is
 	// never cut off, while a silent provider fails in bounded time.
-	Idle_timeout string `yaml:"idle_timeout,omitempty" json:"idle_timeout,omitempty"`
+	Idle_timeout string `json:"idle_timeout,omitempty"`
 
 	// max_retries: automatic retries on a retryable HTTP status. Defaults to 2.
-	Max_retries *int64 `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`
+	Max_retries *int64 `json:"max_retries,omitempty"`
 
 	// headers: extra request headers (e.g. an OpenRouter HTTP-Referer/X-Title).
-	Headers map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 
 	// params: the general request parameters (see #LLMParams).
-	Params LLMParams `yaml:"params,omitempty" json:"params,omitempty"`
+	Params LLMParams `json:"params,omitempty"`
 }
 
 // #LLMParams is the general OpenAI chat-completions request parameter block.
@@ -114,110 +114,110 @@ type LLMSpec struct {
 // never injects a value the author did not ask for.
 type LLMParams struct {
 	// temperature: sampling temperature (0..2).
-	Temperature *float64 `yaml:"temperature,omitempty" json:"temperature,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
 
 	// top_p: nucleus sampling probability mass (0..1).
-	Top_p *float64 `yaml:"top_p,omitempty" json:"top_p,omitempty"`
+	Top_p *float64 `json:"top_p,omitempty"`
 
 	// max_tokens: the completion token bound (ollama: num_predict).
-	Max_tokens *int64 `yaml:"max_tokens,omitempty" json:"max_tokens,omitempty"`
+	Max_tokens *int64 `json:"max_tokens,omitempty"`
 
 	// max_completion_tokens: the newer alias of max_tokens.
-	Max_completion_tokens *int64 `yaml:"max_completion_tokens,omitempty" json:"max_completion_tokens,omitempty"`
+	Max_completion_tokens *int64 `json:"max_completion_tokens,omitempty"`
 
 	// frequency_penalty / presence_penalty: repetition controls (-2..2).
-	Frequency_penalty *float64 `yaml:"frequency_penalty,omitempty" json:"frequency_penalty,omitempty"`
+	Frequency_penalty *float64 `json:"frequency_penalty,omitempty"`
 
-	Presence_penalty *float64 `yaml:"presence_penalty,omitempty" json:"presence_penalty,omitempty"`
+	Presence_penalty *float64 `json:"presence_penalty,omitempty"`
 
 	// seed: requests a reproducible generation where the server supports it.
-	Seed *int64 `yaml:"seed,omitempty" json:"seed,omitempty"`
+	Seed *int64 `json:"seed,omitempty"`
 
 	// stop: one stop sequence, or a list of them.
-	Stop any/* CUE disjunction: (string|list) */ `yaml:"stop,omitempty" json:"stop,omitempty"`
+	Stop any/* CUE disjunction: (string|list) */ `json:"stop,omitempty"`
 
 	// response_format: the structured-output contract (text | json_object |
 	// json_schema).
-	Response_format LLMResponseFormat `yaml:"response_format,omitempty" json:"response_format,omitempty"`
+	Response_format LLMResponseFormat `json:"response_format,omitempty"`
 
 	// reasoning_effort: thinking control for reasoning models ("none" disables
 	// thinking where the server honours it).
-	Reasoning_effort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
+	Reasoning_effort string `json:"reasoning_effort,omitempty"`
 
 	// reasoning: the object form of the same control (ollama accepts either).
-	Reasoning LLMReasoning `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
+	Reasoning LLMReasoning `json:"reasoning,omitempty"`
 
 	// stream_options: streaming response options.
-	Stream_options LLMStreamOptions `yaml:"stream_options,omitempty" json:"stream_options,omitempty"`
+	Stream_options LLMStreamOptions `json:"stream_options,omitempty"`
 
 	// parallel_tool_calls: permit the model to emit several tool calls per turn.
-	Parallel_tool_calls *bool `yaml:"parallel_tool_calls,omitempty" json:"parallel_tool_calls,omitempty"`
+	Parallel_tool_calls *bool `json:"parallel_tool_calls,omitempty"`
 
 	// tool_choice: "none" | "auto" | "required" | {function: {name}}.
-	Tool_choice any/* CUE disjunction: (string|struct) */ `yaml:"tool_choice,omitempty" json:"tool_choice,omitempty"`
+	Tool_choice any/* CUE disjunction: (string|struct) */ `json:"tool_choice,omitempty"`
 
 	// logprobs / top_logprobs: token log-probability reporting (unsupported by
 	// the local ollama OpenAI layer; authorable for a full OpenAI endpoint).
-	Logprobs *bool `yaml:"logprobs,omitempty" json:"logprobs,omitempty"`
+	Logprobs *bool `json:"logprobs,omitempty"`
 
-	Top_logprobs *int64 `yaml:"top_logprobs,omitempty" json:"top_logprobs,omitempty"`
+	Top_logprobs *int64 `json:"top_logprobs,omitempty"`
 
 	// user: an end-user identifier for abuse monitoring.
-	User string `yaml:"user,omitempty" json:"user,omitempty"`
+	User string `json:"user,omitempty"`
 
 	// metadata: arbitrary string metadata attached to the request.
-	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
 
 	// logit_bias: per-token-id bias map.
-	Logit_bias map[string]int64 `yaml:"logit_bias,omitempty" json:"logit_bias,omitempty"`
+	Logit_bias map[string]int64 `json:"logit_bias,omitempty"`
 
 	// extra: undocumented request fields, merged into the request body verbatim
 	// as dotted JSON paths (sjson). The ONE legal place for an unknown key.
-	Extra map[string]any/* CUE top */ `yaml:"extra,omitempty" json:"extra,omitempty"`
+	Extra map[string]any/* CUE top */ `json:"extra,omitempty"`
 }
 
 // #LLMResponseFormat — the structured-output contract. type "json_schema" requires
 // the json_schema block; the schema field is the JSON Schema itself.
 type LLMResponseFormat struct {
-	Type string `yaml:"type,omitempty" json:"type"`
+	Type string `json:"type"`
 
 	Json_schema struct {
-		Name string `yaml:"name,omitempty" json:"name"`
+		Name string `json:"name"`
 
-		Description string `yaml:"description,omitempty" json:"description,omitempty"`
+		Description string `json:"description,omitempty"`
 
-		Schema map[string]any/* CUE top */ `yaml:"schema,omitempty" json:"schema"`
+		Schema map[string]any/* CUE top */ `json:"schema"`
 
-		Strict bool `yaml:"strict,omitempty" json:"strict,omitempty"`
-	} `yaml:"json_schema,omitempty" json:"json_schema,omitempty"`
+		Strict bool `json:"strict,omitempty"`
+	} `json:"json_schema,omitempty"`
 }
 
 // #LLMReasoning — the object form of the reasoning/thinking control.
 type LLMReasoning struct {
-	Effort string `yaml:"effort,omitempty" json:"effort,omitempty"`
+	Effort string `json:"effort,omitempty"`
 }
 
 // #LLMStreamOptions — streaming response options.
 type LLMStreamOptions struct {
-	Include_usage *bool `yaml:"include_usage,omitempty" json:"include_usage,omitempty"`
+	Include_usage *bool `json:"include_usage,omitempty"`
 }
 
 type MediaSpec struct {
-	Files []string `yaml:"files,omitempty" json:"files"`
+	Files []string `json:"files"`
 
-	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
+	Min map[string]int64 `json:"min"`
 
-	Dir string `yaml:"dir,omitempty" json:"dir"`
+	Dir string `json:"dir"`
 }
 
 type ReportSpec struct {
-	Template string `yaml:"template,omitempty" json:"template"`
+	Template string `json:"template"`
 
-	Frontmatter_schema string `yaml:"frontmatter_schema,omitempty" json:"frontmatter_schema,omitempty"`
+	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
 
-	Bed_template string `yaml:"bed_template,omitempty" json:"bed_template,omitempty"`
+	Bed_template string `json:"bed_template,omitempty"`
 
-	Control_bed_template string `yaml:"control_bed_template,omitempty" json:"control_bed_template,omitempty"`
+	Control_bed_template string `json:"control_bed_template,omitempty"`
 }
 
 type Stage map[string]any
@@ -240,35 +240,35 @@ type Stage map[string]any
 // is the common case (a cheap model for a mechanical stage); `llm.params`
 // overlays #LLMParams field-wise. A nil/absent block is a no-op.
 type AgentStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Prompt string `yaml:"prompt,omitempty" json:"prompt"`
+	Prompt string `json:"prompt"`
 
-	Skill []string `yaml:"skill,omitempty" json:"skill,omitempty"`
+	Skill []string `json:"skill,omitempty"`
 
-	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Tools []string `json:"tools,omitempty"`
 
-	Outputs map[string]OutputType `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Outputs map[string]OutputType `json:"outputs,omitempty"`
 
-	Max_turns int64 `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
+	Max_turns int64 `json:"max_turns,omitempty"`
 
-	Llm StageLLMSpec `yaml:"llm,omitempty" json:"llm,omitempty"`
+	Llm StageLLMSpec `json:"llm,omitempty"`
 
-	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
+	Redo RedoSpec `json:"redo,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 
-	Cache CacheSpec `yaml:"cache,omitempty" json:"cache,omitempty"`
+	Cache CacheSpec `json:"cache,omitempty"`
 }
 
 type OutputType struct {
-	Type string `yaml:"type,omitempty" json:"type"`
+	Type string `json:"type"`
 
-	Enum []string `yaml:"enum,omitempty" json:"enum,omitempty"`
+	Enum []string `json:"enum,omitempty"`
 
-	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // #StageLLMSpec — the per-stage llm override: the endpoint knobs a stage may
@@ -277,49 +277,49 @@ type OutputType struct {
 // CONNECTION-level and intentionally NOT overridable per stage — one lane
 // speaks to one endpoint with one liveness policy.
 type StageLLMSpec struct {
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 
-	Base_url string `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	Base_url string `json:"base_url,omitempty"`
 
-	Api_key string `yaml:"api_key,omitempty" json:"api_key,omitempty"`
+	Api_key string `json:"api_key,omitempty"`
 
-	Params LLMParams `yaml:"params,omitempty" json:"params,omitempty"`
+	Params LLMParams `json:"params,omitempty"`
 }
 
 type RedoSpec struct {
-	On_fail any/* CUE disjunction: (string|list) */ `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
+	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
 
-	Triggers map[string]string `yaml:"triggers,omitempty" json:"triggers,omitempty"`
+	Triggers map[string]string `json:"triggers,omitempty"`
 
-	Max int64 `yaml:"max,omitempty" json:"max,omitempty"`
+	Max int64 `json:"max,omitempty"`
 
-	Escalate_after int64 `yaml:"escalate_after,omitempty" json:"escalate_after,omitempty"`
+	Escalate_after int64 `json:"escalate_after,omitempty"`
 }
 
 type CacheSpec struct {
-	Path string `yaml:"path,omitempty" json:"path"`
+	Path string `json:"path"`
 
-	Key string `yaml:"key,omitempty" json:"key"`
+	Key string `json:"key"`
 
-	Key_field string `yaml:"key_field,omitempty" json:"key_field,omitempty"`
+	Key_field string `json:"key_field,omitempty"`
 
-	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
 }
 
 type ProbeStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Verbs []string `yaml:"verbs,omitempty" json:"verbs"`
+	Verbs []string `json:"verbs"`
 
-	Input map[string]any/* CUE top */ `yaml:"input,omitempty" json:"input,omitempty"`
+	Input map[string]any/* CUE top */ `json:"input,omitempty"`
 
-	Outputs []string `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Outputs []string `json:"outputs,omitempty"`
 
-	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
+	Redo RedoSpec `json:"redo,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 // #ProbeStage outputs: the probe's VALUE spreads as named outputs when it is a
@@ -329,17 +329,17 @@ type ProbeStage struct {
 // evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
 // agent-check: steps, graded by the live agent in the venue via the SDK.
 type AdeStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Bed string `yaml:"bed,omitempty" json:"bed"`
+	Bed string `json:"bed"`
 
-	Fail_on []string `yaml:"fail_on,omitempty" json:"fail_on,omitempty"`
+	Fail_on []string `json:"fail_on,omitempty"`
 
-	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
+	Redo RedoSpec `json:"redo,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 // #GenerateStage: render an inline template to `out`. `negate_checks` negates
@@ -350,21 +350,21 @@ type AdeStage struct {
 // an indented multi-line report and bullet lists) into a single file. An unknown
 // transform is a HARD error — never a silent no-op.
 type GenerateStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Template string `yaml:"template,omitempty" json:"template"`
+	Template string `json:"template"`
 
-	Vars map[string]any/* CUE top */ `yaml:"vars,omitempty" json:"vars,omitempty"`
+	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
 
-	Out string `yaml:"out,omitempty" json:"out"`
+	Out string `json:"out"`
 
-	Validate string `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Validate string `json:"validate,omitempty"`
 
-	Negate_checks bool `yaml:"negate_checks,omitempty" json:"negate_checks,omitempty"`
+	Negate_checks bool `json:"negate_checks,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 // #EmitStage: the SCHEMA-FIRST artifact writer — the replacement for hand-written
@@ -407,149 +407,149 @@ type GenerateStage struct {
 //	        YAML quoting/block-scalar — which is what lets a prose field (the
 //	        user-voice report) be composed WITHOUT a hand-written YAML template.
 type EmitStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Schema string `yaml:"schema,omitempty" json:"schema"`
+	Schema string `json:"schema"`
 
-	Value map[string]any/* CUE top */ `yaml:"value,omitempty" json:"value"`
+	Value map[string]any/* CUE top */ `json:"value"`
 
-	Vars map[string]any/* CUE top */ `yaml:"vars,omitempty" json:"vars,omitempty"`
+	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
 
-	Out string `yaml:"out,omitempty" json:"out"`
+	Out string `json:"out"`
 
-	Format string `yaml:"format,omitempty" json:"format,omitempty"`
+	Format string `json:"format,omitempty"`
 
-	Validate string `yaml:"validate,omitempty" json:"validate,omitempty"`
+	Validate string `json:"validate,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type MediaStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Assemble bool `yaml:"assemble,omitempty" json:"assemble"`
+	Assemble bool `json:"assemble"`
 
-	Transcode string `yaml:"transcode,omitempty" json:"transcode,omitempty"`
+	Transcode string `json:"transcode,omitempty"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type GateStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Condition string `yaml:"condition,omitempty" json:"condition"`
+	Condition string `json:"condition"`
 
-	Skip_when string `yaml:"skip_when,omitempty" json:"skip_when,omitempty"`
+	Skip_when string `json:"skip_when,omitempty"`
 }
 
 type CommandStage struct {
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Id string `yaml:"id,omitempty" json:"id"`
+	Id string `json:"id"`
 
-	Command string `yaml:"command,omitempty" json:"command"`
+	Command string `json:"command"`
 
-	Expect_exit int64 `yaml:"expect_exit,omitempty" json:"expect_exit,omitempty"`
+	Expect_exit int64 `json:"expect_exit,omitempty"`
 }
 
 // #StageFinding — one row of the per-run ledger dump (stage-findings.yml). The
 // dump is emitted schema-first (marshalled + validated), so it is always valid
 // YAML — a debug artifact no reader can parse is worthless.
 type StageFinding struct {
-	Stage string `yaml:"stage,omitempty" json:"stage"`
+	Stage string `json:"stage"`
 
-	Kind string `yaml:"kind,omitempty" json:"kind"`
+	Kind string `json:"kind"`
 
-	Status string `yaml:"status,omitempty" json:"status"`
+	Status string `json:"status"`
 
-	Trigger string `yaml:"trigger,omitempty" json:"trigger,omitempty"`
+	Trigger string `json:"trigger,omitempty"`
 
-	Message string `yaml:"message,omitempty" json:"message,omitempty"`
+	Message string `json:"message,omitempty"`
 
 	// duration_seconds: the stage's wall-clock time. The runner has ALWAYS
 	// measured this (StageResult.Duration) but the dump DROPPED it, so the one
 	// artifact that could answer "where did the lane's 13 minutes go?" carried
 	// no timing at all. It is authored here so the dump is the timing record.
-	Duration_seconds int64 `yaml:"duration_seconds,omitempty" json:"duration_seconds,omitempty"`
+	Duration_seconds int64 `json:"duration_seconds,omitempty"`
 
-	Outputs map[string]any/* CUE top */ `yaml:"outputs,omitempty" json:"outputs,omitempty"`
+	Outputs map[string]any/* CUE top */ `json:"outputs,omitempty"`
 }
 
 type StageFindings []StageFinding
 
 // Probe verb inputs (deterministic, engine-native).
 type MediaGateInput struct {
-	Dir string `yaml:"dir,omitempty" json:"dir"`
+	Dir string `json:"dir"`
 
-	Files []any/* CUE closed list */ `yaml:"files,omitempty" json:"files"`
+	Files []any/* CUE closed list */ `json:"files"`
 
-	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
+	Min map[string]int64 `json:"min"`
 }
 
 type LockAuditInput struct {
-	Trees []any /* CUE closed list */ `yaml:"trees,omitempty" json:"trees"`
+	Trees []any /* CUE closed list */ `json:"trees"`
 }
 
 type SequencingInput struct {
-	Bed_prefix string `yaml:"bed_prefix,omitempty" json:"bed_prefix"`
+	Bed_prefix string `json:"bed_prefix"`
 
-	Golden string `yaml:"golden,omitempty" json:"golden"`
+	Golden string `json:"golden"`
 }
 
 type HeadFreshnessInput struct {
-	Plan_sha string `yaml:"plan_sha,omitempty" json:"plan_sha"`
+	Plan_sha string `json:"plan_sha"`
 
-	Pr int64 `yaml:"pr,omitempty" json:"pr"`
+	Pr int64 `json:"pr"`
 
-	Repo string `yaml:"repo,omitempty" json:"repo"`
+	Repo string `json:"repo"`
 }
 
 type ConfigAuditInput struct {
-	Bed string `yaml:"bed,omitempty" json:"bed"`
+	Bed string `json:"bed"`
 
-	Pr int64 `yaml:"pr,omitempty" json:"pr"`
+	Pr int64 `json:"pr"`
 }
 
 type ResolveChannelInput struct {
-	Channel string `yaml:"channel,omitempty" json:"channel"`
+	Channel string `json:"channel"`
 
 	Channels map[string]struct {
-		Golden string `yaml:"golden,omitempty" json:"golden"`
+		Golden string `json:"golden"`
 
-		Provision string `yaml:"provision,omitempty" json:"provision"`
-	} `yaml:"channels,omitempty" json:"channels"`
+		Provision string `json:"provision"`
+	} `json:"channels"`
 }
 
 type EvidenceAuditInput struct {
-	Dir string `yaml:"dir,omitempty" json:"dir"`
+	Dir string `json:"dir"`
 
-	Files []any/* CUE closed list */ `yaml:"files,omitempty" json:"files"`
+	Files []any/* CUE closed list */ `json:"files"`
 
-	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
+	Min map[string]int64 `json:"min"`
 
-	Trees []any/* CUE closed list */ `yaml:"trees,omitempty" json:"trees"`
+	Trees []any/* CUE closed list */ `json:"trees"`
 }
 
 // The P1 agent runtime input (the standalone + stage op).
 type AgentRunInput struct {
-	System_prompt string `yaml:"system_prompt,omitempty" json:"system_prompt"`
+	System_prompt string `json:"system_prompt"`
 
-	Prompt string `yaml:"prompt,omitempty" json:"prompt"`
+	Prompt string `json:"prompt"`
 
-	Skill []string `yaml:"skill,omitempty" json:"skill,omitempty"`
+	Skill []string `json:"skill,omitempty"`
 
-	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Tools []string `json:"tools,omitempty"`
 }
 
 // #LLMNamedToolChoice — force one named function tool.
 type LLMNamedToolChoice struct {
 	Function struct {
-		Name string `yaml:"name,omitempty" json:"name"`
-	} `yaml:"function,omitempty" json:"function"`
+		Name string `json:"name"`
+	} `json:"function"`
 }
