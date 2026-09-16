@@ -457,3 +457,66 @@ func TestToSpecLLM_PropagatesErrors(t *testing.T) {
 		t.Fatalf("stage bridge: %v model=%q", err, st.Model)
 	}
 }
+
+// TestChatVision_AdapterDrivesTheSharedClient: the engine's SHIPPED chatVision
+// adapter must be the thing under test. The first revision of the rewire deleted
+// the vision seam and pointed the conformance test at llmkit.ChatVision
+// DIRECTLY, so nothing failed if the adapter itself broke (the validator caught
+// exactly that). This test drives the ADAPTER: a vision message must reach the
+// server as content parts with an image_url data URL, and the adapter must return
+// the model's text.
+func TestChatVision_AdapterDrivesTheSharedClient(t *testing.T) {
+	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "a red square") },
+		func(t *testing.T, body map[string]any) {
+			msgs, _ := body["messages"].([]any)
+			if len(msgs) == 0 {
+				t.Fatal("no messages")
+			}
+			user, _ := msgs[0].(map[string]any)
+			parts, ok := user["content"].([]any)
+			if !ok {
+				t.Fatalf("content must be a content-parts array, got %T", user["content"])
+			}
+			var sawImage bool
+			for _, p := range parts {
+				pm, _ := p.(map[string]any)
+				if pm["type"] == "image_url" {
+					sawImage = true
+					iu, _ := pm["image_url"].(map[string]any)
+					if url, _ := iu["url"].(string); !strings.HasPrefix(url, "data:image/png;base64,") {
+						t.Errorf("image must be a base64 data URL, got %q", url)
+					}
+				}
+			}
+			if !sawImage {
+				t.Error("the adapter did not send the image as a content part")
+			}
+		})
+
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	got, err := chatVision(t.Context(), rc, nil, "what is this?", []string{img})
+	if err != nil {
+		t.Fatalf("chatVision adapter: %v", err)
+	}
+	if got != "a red square" {
+		t.Fatalf("adapter reply = %q, want %q", got, "a red square")
+	}
+}
+
+// TestChatVision_AdapterPropagatesBridgeError: a client failure must surface
+// through the adapter (never a silent empty reply). The mock returns a 500, so
+// the failure is deterministic and does not depend on a live endpoint.
+func TestChatVision_AdapterPropagatesBridgeError(t *testing.T) {
+	srv := captureLLM(t, func(rw http.ResponseWriter) {
+		rw.WriteHeader(http.StatusInternalServerError)
+		_, _ = rw.Write([]byte(`{"error":{"message":"boom"}}`))
+	}, nil)
+	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	if _, err := chatVision(t.Context(), rc, nil, "q", []string{img}); err == nil {
+		t.Fatal("the adapter must surface a client failure, never an empty reply")
+	}
+}
