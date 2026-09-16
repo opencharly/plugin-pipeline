@@ -50,49 +50,53 @@ type (
 //
 // An empty RESOLVED api_key means ABSENT: no Authorization header is sent, so a
 // missing secret can never zero out a lane — and the local ollama needs none.
-func resolveLLM(rc *runCtx, stage *params.StageLLMSpec) llmkit.Config {
+func resolveLLM(rc *runCtx, stage *params.StageLLMSpec) (llmkit.Config, error) {
 	cfg := llmkit.Default()
 	if rc != nil {
-		cfg = cfg.Apply(entityToSpec(rc.llm)) // layer 3 — the entity's authored llm: block
+		// layer 3 — the entity's authored llm: block
+		e, err := toSpecLLM(rc.llm)
+		if err != nil {
+			return llmkit.Config{}, fmt.Errorf("llm: entity block: %w", err)
+		}
+		cfg = cfg.Apply(e)
 	}
 	if stage != nil { // layer 2 — the stage-local override
-		cfg = cfg.Apply(stageToSpec(stage))
+		s, err := toSpecLLM(*stage)
+		if err != nil {
+			return llmkit.Config{}, fmt.Errorf("llm: stage override: %w", err)
+		}
+		cfg = cfg.Apply(s)
 	}
-	return cfg.FromEnv() // layer 1 — the operator env
+	return cfg.FromEnv(), nil // layer 1 — the operator env
 }
 
-// entityToSpec bridges the entity's generated llm block onto the contract
-// #LLMSpec (same CUE vocabulary; the JSON round-trip is exact).
-func entityToSpec(e params.LLMSpec) spec.LLMSpec {
-	b, err := json.Marshal(e)
+// toSpecLLM bridges a generated plugin llm value (the entity's params.LLMSpec or
+// a stage's params.StageLLMSpec) onto the contract spec.LLMSpec the shared client
+// consumes. The two shapes are the same CUE vocabulary, so the JSON round-trip is
+// exact; ONE helper serves both callers (R3 — the value/pointer difference is the
+// caller's, not a reason for a second copy).
+//
+// The error is PROPAGATED, never swallowed: a failed conversion would silently
+// drop the entire authored llm: block and let the lane fall back to defaults —
+// exactly the silent-config-failure class R1 forbids.
+func toSpecLLM(v any) (spec.LLMSpec, error) {
+	b, err := json.Marshal(v)
 	if err != nil {
-		return spec.LLMSpec{}
+		return spec.LLMSpec{}, fmt.Errorf("marshal: %w", err)
 	}
 	var out spec.LLMSpec
 	if err := json.Unmarshal(b, &out); err != nil {
-		return spec.LLMSpec{}
+		return spec.LLMSpec{}, fmt.Errorf("unmarshal: %w", err)
 	}
-	return out
-}
-
-// stageToSpec bridges the stage's generated override onto the contract #LLMSpec.
-// The two shapes are the same CUE vocabulary; a JSON round-trip is exact. (An
-// absent override yields the zero value, which Apply treats as "fill nothing".)
-func stageToSpec(stage *params.StageLLMSpec) spec.LLMSpec {
-	b, err := json.Marshal(stage)
-	if err != nil {
-		return spec.LLMSpec{}
-	}
-	var out spec.LLMSpec
-	if err := json.Unmarshal(b, &out); err != nil {
-		return spec.LLMSpec{}
-	}
-	return out
+	return out, nil
 }
 
 // chat issues ONE streaming completion through the shared client.
 func chat(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, msgs []chatMsg, tools []openai.ChatCompletionToolUnionParam) (chatMsg, error) {
-	cfg := resolveLLM(rc, stage)
+	cfg, err := resolveLLM(rc, stage)
+	if err != nil {
+		return chatMsg{}, err
+	}
 	out, err := llmkit.Chat(ctx, cfg, llmkit.ToSDKMessages(msgs), tools)
 	if err != nil {
 		return chatMsg{}, err
@@ -104,7 +108,11 @@ func chat(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, msgs []ch
 
 // chatVision sends one multimodal completion through the shared client.
 func chatVision(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, prompt string, images []string) (string, error) {
-	return llmkit.ChatVision(ctx, resolveLLM(rc, stage), prompt, images)
+	cfg, err := resolveLLM(rc, stage)
+	if err != nil {
+		return "", err
+	}
+	return llmkit.ChatVision(ctx, cfg, prompt, images)
 }
 
 func derefString(p *string) string {

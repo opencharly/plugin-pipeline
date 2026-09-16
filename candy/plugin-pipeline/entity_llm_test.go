@@ -71,7 +71,10 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 // built-in default (the LOCAL ollama server model) applies. FAILS without the
 // deepseek-v4.1-flash:cloud default (the V4.0->V4.1 cutover).
 func TestLLMDefaultModel(t *testing.T) {
-	got := resolveLLM(nil, nil)
+	got, err := resolveLLM(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Model != "deepseek-v4.1-flash:cloud" {
 		t.Errorf("default model: got %q, want \"deepseek-v4.1-flash:cloud\"", got.Model)
 	}

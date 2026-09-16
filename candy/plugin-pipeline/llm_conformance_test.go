@@ -319,7 +319,10 @@ func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 		Model:  "stage-model",
 		Params: params.LLMParams{Temperature: &stageTemp},
 	}
-	got := resolveLLM(rc, stage)
+	got, err := resolveLLM(rc, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Model != "stage-model" {
 		t.Errorf("model: stage must win, got %q", got.Model)
 	}
@@ -337,7 +340,11 @@ func TestConformance_EnvBeatsStageAndEntity(t *testing.T) {
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model"}}
 	stage := &params.StageLLMSpec{Model: "stage-model"}
-	if got := resolveLLM(rc, stage).Model; got != "env-model" {
+	resolved, err := resolveLLM(rc, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Model; got != "env-model" {
 		t.Fatalf("model: env must win, got %q", got)
 	}
 }
@@ -398,7 +405,10 @@ func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 		Idle_timeout: "45s",
 		Max_retries:  &retries,
 	}}
-	got := resolveLLM(rc, nil)
+	got, err := resolveLLM(rc, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got.Timeout.String() != "1m30s" {
 		t.Errorf("timeout: got %s, want 1m30s", got.Timeout)
 	}
@@ -428,3 +438,22 @@ func TestConformance_ExtraEscapeHatchIsOrdered(t *testing.T) {
 // openaiBoolPtr is the test-local bool pointer helper (the generated param
 // fields are *bool).
 func openaiBoolPtr(b bool) *bool { return &b }
+
+// TestToSpecLLM_PropagatesErrors: the bridge must NEVER silently degrade to a zero
+// config — a failed conversion would drop the entire authored llm: block and let
+// the lane fall back to defaults (the silent-config-failure class R1 forbids).
+// A value json.Marshal cannot encode (a channel) is the honest failure path.
+func TestToSpecLLM_PropagatesErrors(t *testing.T) {
+	if _, err := toSpecLLM(make(chan int)); err == nil {
+		t.Fatal("an unencodable value must return an error, never a zero spec.LLMSpec")
+	}
+	// the happy path still works for both caller shapes
+	e, err := toSpecLLM(params.LLMSpec{Model: "m"})
+	if err != nil || e.Model != "m" {
+		t.Fatalf("entity bridge: %v model=%q", err, e.Model)
+	}
+	st, err := toSpecLLM(params.StageLLMSpec{Model: "s"})
+	if err != nil || st.Model != "s" {
+		t.Fatalf("stage bridge: %v model=%q", err, st.Model)
+	}
+}
