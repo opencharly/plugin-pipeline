@@ -1,327 +1,26 @@
 package pluginpipeline
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
-	"time"
 
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"gopkg.in/yaml.v3"
 )
 
 // P1 — the bare agent runtime: a direct chat-completions call with a fully
-// configurable system prompt (inline), optional skills appended (skills.go),
-// and optional tools dispatched back to the engine (tools.go).
-
-type chatMsg struct {
-	Role       string     `json:"role"`
-	Content    *string    `json:"content,omitempty"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-}
-type toolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-	} `json:"function"`
-}
-type toolSchema struct {
-	Type     string         `json:"type"`
-	Function functionSchema `json:"function"`
-}
-type functionSchema struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-}
-type chatRequest struct {
-	Model       string       `json:"model"`
-	Messages    []chatMsg    `json:"messages"`
-	Temperature float64      `json:"temperature"`
-	Tools       []toolSchema `json:"tools,omitempty"`
-	ToolChoice  string       `json:"tool_choice,omitempty"`
-	// Stream requests SSE (`stream: true`) so response headers arrive at once and
-	// chunks flow as the model produces — the precondition for an IDLE bound
-	// instead of a whole-generation deadline.
-	Stream bool `json:"stream,omitempty"`
-}
-type chatResponse struct {
-	Choices []struct {
-		Message struct {
-			Content   *string    `json:"content"`
-			ToolCalls []toolCall `json:"tool_calls"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
-// llmConfig resolves the LLM endpoint. Precedence, every layer:
-// 1. the ENV overrides (EVAL_LLM_BASE_URL / EVAL_LLM_MODEL / EVAL_LLM_API_KEY)
-//   - the operator layer,
+// configurable system prompt (inline), optional skills appended, and optional
+// tools dispatched back to the engine (tools.go). The wire client is the
+// official openai-go SDK (llm.go); this file owns the turn loop + the skills /
+// typed-output contract.
 //
-// 2. the entity's authored llm block - the lane-author layer,
-// 3. the built-in default - the LOCAL ollama server (deepseek-v4.1-flash:cloud).
-// An empty RESOLVED key means ABSENT: the client sends NO auth header (the
-// local ollama needs none) - a missing secret can never zero out other layers.
-func llmBaseURL(rc *runCtx) string {
-	if v := os.Getenv("EVAL_LLM_BASE_URL"); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	if rc != nil && rc.llm != nil {
-		if v, ok := rc.llm["base_url"].(string); ok && v != "" {
-			return strings.TrimRight(v, "/")
-		}
-	}
-	return "http://localhost:11434/v1"
-}
-func llmModel(rc *runCtx) string {
-	if v := os.Getenv("EVAL_LLM_MODEL"); v != "" {
-		return v
-	}
-	if rc != nil && rc.llm != nil {
-		if v, ok := rc.llm["model"].(string); ok && v != "" {
-			return v
-		}
-	}
-	return "deepseek-v4.1-flash:cloud"
-}
-func llmAPIKey(rc *runCtx) string {
-	if v := os.Getenv("EVAL_LLM_API_KEY"); v != "" {
-		return v
-	}
-	if rc != nil && rc.llm != nil {
-		if v, ok := rc.llm["api_key"].(string); ok {
-			return v
-		}
-	}
-	return ""
-}
-func envMaxTurns() int {
-	if v := os.Getenv("EVAL_MAX_TURNS"); v != "" {
-		if n, err := parseInt(v); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 20
-}
-
-func intValue(v any) int {
-	switch t := v.(type) {
-	case float64:
-		return int(t)
-	case int:
-		return t
-	case string:
-		n, _ := parseInt(t)
-		return n
-	}
-	return 0
-}
-func parseInt(s string) (int, error) {
-	n := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("not a number")
-		}
-		n = n*10 + int(r-'0')
-	}
-	return n, nil
-}
-
-// defaultChatIdleTimeout bounds how long a STREAMING completion may go with NO
-// chunk before it is treated as stalled. This is an IDLE bound, not a
-// whole-generation deadline: a slow reasoning model that keeps emitting
-// (reasoning deltas, tool-call deltas) is making progress and is never cut off,
-// while a provider that has genuinely gone silent fails in bounded time.
-//
-// The predecessor here was `http.Client{Timeout: 5 * time.Minute}` on a
-// NON-streaming request — a whole-generation deadline, so a large/slow
-// generation was guillotined at 5 minutes with `context deadline exceeded
-// (Client.Timeout exceeded while awaiting headers)` even though the provider was
-// still working. That is the SAME defect class the org's pr-validator workflow
-// RCA'd for plugin-review (non-streaming request under a whole-generation
-// deadline); the remedy is the same: stream, and bound the idle gap.
-//
-// Overridable via EVAL_LLM_IDLE_TIMEOUT (any Go duration, e.g. "10m"); the
-// operator can raise it for an unusually slow endpoint.
-func chatIdleTimeout() time.Duration {
-	if v := os.Getenv("EVAL_LLM_IDLE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
-	}
-	return 3 * time.Minute
-}
-
-// chat issues ONE streaming chat-completions call and assembles the assistant
-// message from the SSE deltas.
-//
-// Streaming is LOAD-BEARING, not an optimization: with `stream: true` the
-// response headers arrive immediately and chunks flow as the model produces, so
-// the bound can be an IDLE bound (no chunk for chatIdleTimeout) instead of a
-// whole-generation deadline. Content deltas and tool-call deltas (assembled by
-// index — the OpenAI SSE shape) both count as progress.
-func chat(ctx context.Context, rc *runCtx, msgs []chatMsg, tools []toolSchema) (chatMsg, error) {
-	reqBody := chatRequest{Model: llmModel(rc), Messages: msgs, Temperature: 0.2, Tools: tools, ToolChoice: "auto", Stream: true}
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return chatMsg{}, err
-	}
-
-	// The request rides a CANCELLABLE CHILD of the caller's ctx, and the IDLE
-	// watchdog CANCELS it. This is the mechanism that actually bounds a stalled
-	// stream: http.Transport cancels the request on ctx-done by tearing the
-	// connection DOWN, which makes the blocked resp.Body.Read return an error.
-	// (resp.Body.Close() does NOT work here — in net/http, bodyEOFSignal.Read
-	// holds es.mu across the blocking read and bodyEOFSignal.Close blocks on that
-	// same mutex, so a Close from the watchdog just queues behind the in-flight
-	// Read and unblocks nothing. Validator-caught; see the stall test.)
-	idle := chatIdleTimeout()
-	readCtx, cancelRead := context.WithCancel(ctx)
-	defer cancelRead()
-	var idleTripped atomic.Bool
-	watchdog := time.AfterFunc(idle, func() {
-		idleTripped.Store(true)
-		cancelRead()
-	})
-	defer watchdog.Stop()
-
-	req, err := http.NewRequestWithContext(readCtx, http.MethodPost, llmBaseURL(rc)+"/chat/completions", bytes.NewReader(body))
-	if err != nil {
-		return chatMsg{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if k := llmAPIKey(rc); k != "" {
-		req.Header.Set("Authorization", "Bearer "+k)
-	}
-	req.Header.Set("HTTP-Referer", "https://github.com/opencharly/plugin-pipeline")
-	req.Header.Set("X-Title", "plugin-pipeline")
-	// No http.Client.Timeout (that would be a whole-generation deadline again):
-	// the request is bounded by readCtx — the caller's ctx plus the IDLE watchdog
-	// that cancels it on a chunk gap.
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		if idleTripped.Load() {
-			return chatMsg{}, fmt.Errorf("LLM stream stalled: no response for %s (provider unreachable or silent); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint", idle)
-		}
-		return chatMsg{}, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-		return chatMsg{}, fmt.Errorf("LLM %d: %s", resp.StatusCode, truncate(string(raw), 300))
-	}
-
-	var (
-		contentSB strings.Builder
-		toolCalls = map[int]*toolCall{} // assembled by index (OpenAI SSE)
-		maxIdx    = -1
-	)
-	scanner := bufio.NewScanner(io.LimitReader(resp.Body, 8<<20))
-	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for scanner.Scan() {
-		watchdog.Reset(idle) // progress: a chunk arrived
-		line := strings.TrimSpace(scanner.Text())
-		const prefix = "data:"
-		if !strings.HasPrefix(line, prefix) {
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, prefix))
-		if payload == "[DONE]" {
-			break
-		}
-		var chunk struct {
-			Choices []struct {
-				Delta struct {
-					Content   *string `json:"content"`
-					ToolCalls []struct {
-						Index    int    `json:"index"`
-						ID       string `json:"id"`
-						Type     string `json:"type"`
-						Function struct {
-							Name      string `json:"name"`
-							Arguments string `json:"arguments"`
-						} `json:"function"`
-					} `json:"tool_calls"`
-				} `json:"delta"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			continue // a non-JSON keepalive/comment line is not fatal
-		}
-		for _, ch := range chunk.Choices {
-			if ch.Delta.Content != nil {
-				contentSB.WriteString(*ch.Delta.Content)
-			}
-			for _, tc := range ch.Delta.ToolCalls {
-				cur := toolCalls[tc.Index]
-				if cur == nil {
-					cur = &toolCall{}
-					toolCalls[tc.Index] = cur
-				}
-				if tc.ID != "" {
-					cur.ID = tc.ID
-				}
-				if tc.Type != "" {
-					cur.Type = tc.Type
-				}
-				cur.Function.Name += tc.Function.Name
-				cur.Function.Arguments += tc.Function.Arguments
-				if tc.Index > maxIdx {
-					maxIdx = tc.Index
-				}
-			}
-		}
-	}
-	// The watchdog cancels readCtx, which the Transport turns into a body-read
-	// error; distinguish that IDLE trip from a genuine transport error via the
-	// atomic flag. A stall is NEVER silent (R1): even a partial turn is an ERROR,
-	// because a truncated completion must not be mistaken for a finished one.
-	if idleTripped.Load() {
-		return chatMsg{}, fmt.Errorf("LLM stream stalled: no chunk for %s after %d byte(s) of content and %d tool call(s) (provider stopped streaming); raise EVAL_LLM_IDLE_TIMEOUT for an unusually slow endpoint",
-			idle, contentSB.Len(), len(toolCalls))
-	}
-	if err := scanner.Err(); err != nil {
-		return chatMsg{}, err
-	}
-	// A stream that ended with NEITHER content NOR tool calls (a 200 with an empty
-	// completion, e.g. a filtered turn) is not a usable assistant message — fail
-	// rather than return an empty turn that downstream renders as nothing. This is
-	// the streaming-form equivalent of the removed `len(cr.Choices) == 0` guard.
-	var contentPtr *string
-	if contentSB.Len() > 0 {
-		s := contentSB.String()
-		contentPtr = &s
-	}
-	var calls []toolCall
-	for i := 0; i <= maxIdx; i++ {
-		if tc := toolCalls[i]; tc != nil {
-			calls = append(calls, *tc)
-		}
-	}
-	if contentPtr == nil && len(calls) == 0 {
-		return chatMsg{}, fmt.Errorf("LLM: empty completion (no content, no tool calls)")
-	}
-	fmt.Printf("[chat] model=%s turns-so-far=%d content=%.120s tool_calls=%d\n", llmModel(rc), len(msgs), truncate(func() string {
-		if contentPtr != nil {
-			return *contentPtr
-		}
-		return ""
-	}(), 120), len(calls))
-	return chatMsg{Role: "assistant", Content: contentPtr, ToolCalls: calls}, nil
-}
+// envMaxTurns / intValue / parseInt moved to llm.go with the config resolution
+// (envMaxTurns is now the stage's authored max_turns with the same env default).
 
 func truncate(s string, n int) string {
 	if len(s) <= n {
@@ -333,13 +32,14 @@ func truncate(s string, n int) string {
 // runAgent — the P1 runtime (standalone CLI + the agent stage); the turn cap
 // from the env (the CLI default).
 func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string) (string, error) {
-	return runAgentTurns(ctx, rc, systemPrompt, prompt, tools, 0)
+	return runAgentTurns(ctx, rc, systemPrompt, prompt, tools, 0, nil)
 }
 
 // runAgentTurns: the runtime with an EXPLICIT turn cap (0 = the env default) —
-// never a per-stage os.Setenv (process-global, raced the batch lanes).
-func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string, stageMaxTurns int) (string, error) {
-	sys := systemPrompt // skills are resolved in runAgentStage against the entity's corpus (skills.go is deleted)
+// never a per-stage os.Setenv (process-global, raced the batch lanes). `stage`
+// carries the optional per-stage llm override (env > stage > entity > default).
+func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string, stageMaxTurns int, stage *params.StageLLMSpec) (string, error) {
+	sys := systemPrompt // skills are resolved in runAgentStage against the entity's corpus
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
 	maxTurns := stageMaxTurns
@@ -347,7 +47,7 @@ func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string,
 		maxTurns = envMaxTurns()
 	}
 	for turn := 0; turn < maxTurns; turn++ {
-		msg, err := chat(ctx, rc, msgs, toolSch)
+		msg, err := chat(ctx, rc, stage, msgs, toolSch)
 		if err != nil {
 			return "", err
 		}
@@ -379,12 +79,12 @@ func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string,
 		// (RCA 2026.252.2250: 952 failed reads burned the report agents' turns).
 		consecutiveFails := 0
 		for _, tc := range msg.ToolCalls {
-			res := dispatchTool(tc.Function.Name, tc.Function.Arguments, rc)
-			fmt.Printf("[tool] %s(%s) -> %.200s\n", tc.Function.Name, tc.Function.Arguments, res)
+			res := dispatchTool(tc.Name, tc.Arguments, rc)
+			fmt.Printf("[tool] %s(%s) -> %.200s\n", tc.Name, tc.Arguments, res)
 			if strings.Contains(res, "\"error\"") {
 				consecutiveFails++
 				if consecutiveFails >= 5 {
-					return "", fmt.Errorf("agent: %d consecutive tool failures (last: %s) — the evidence seam is broken; aborting instead of spiraling", consecutiveFails, tc.Function.Name)
+					return "", fmt.Errorf("agent: %d consecutive tool failures (last: %s) — the evidence seam is broken; aborting instead of spiraling", consecutiveFails, tc.Name)
 				}
 			} else {
 				consecutiveFails = 0
@@ -475,7 +175,7 @@ func runAgentStage(ctx context.Context, rc *runCtx, raw map[string]any, l *ledge
 	if rc != nil && rc.ledger != nil {
 		user += "\n\nLedger facts (the prior stage outputs of THIS run):\n" + rc.ledger.facts()
 	}
-	resp, err := runAgentTurns(ctx, rc, sys, user, strList(raw["tools"]), mt)
+	resp, err := runAgentTurns(ctx, rc, sys, user, strList(raw["tools"]), mt, stageLLM(raw))
 	if err != nil {
 		return map[string]any{}, err
 	}

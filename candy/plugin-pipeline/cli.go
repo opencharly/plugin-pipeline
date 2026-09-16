@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/opencharly/sdk"
@@ -151,27 +150,25 @@ func restAfter(args []string, name string) []string {
 	return nil
 }
 
-// teardownVenue: the charly-native between-lane cleanup — `charly check stop`
-// for the lane's two beds (the sequencing gate then verifies a quiescent venue).
-func teardownVenue(pr, workdir string) error {
-	charlyBin := os.Getenv("CHARLY_BIN")
-	if charlyBin == "" {
-		charlyBin = "charly"
-	}
-	// the charly-native venue destroy: `charly vm destroy <golden-entity>
-	// --domain <venued domain>` (the --domain WITHOUT the charly- prefix; the
-	// vm verb adds it). The sequencing gate then verifies a quiescent venue.
-	for _, suffix := range []string{"-vm-probe", "-vm"} {
-		args := []string{"vm", "destroy", "check-omarchy-eval-base-inst", "--domain", "check-omarchy-pr-" + pr + suffix}
-		if workdir != "" {
-			args = append([]string{"-C", workdir}, args...)
-		}
-		cmd := exec.Command(charlyBin, args...)
-		cmd.Env = os.Environ()
-		_ = cmd.Run()
-	}
-	return nil
-}
+// REMOVED: teardownVenue / teardownLaneBeds (the batch-level venue teardown).
+//
+// Venue lifecycle has ONE owner: the `ade` stage itself. `charly check run` is
+// invoked with `--keep-venue` (the evidence is collected from the live domain),
+// and runAdeBed's deferred destroyVenue tears it down on every exit path,
+// including an abort (`context.WithoutCancel`). A SECOND owner was a defect of
+// exactly the kind R3 forbids:
+//
+//   - it hardcoded the eval-omarchy golden entity and a
+//     `check-omarchy-pr-<pr>-vm`/`-vm-probe` domain scheme in the domain-neutral
+//     engine (the `-vm-probe` suffix matched no entity at all);
+//   - it resolved the bed refs against the PROCESS env (`envMap()`), not the
+//     lane's run context — the same per-lane-env break this change fixes in
+//     ade.go, so any `$env.*` bed ref resolved to the operator's value or
+//     empty and the destroy silently targeted the wrong name;
+//   - it used the signal-cancelled ctx, so it was skipped precisely in the
+//     abort scenario teardown exists for.
+//
+// The `ade` stage owns the venue; the batch does not duplicate the rule.
 
 func flagAfter(args []string, name string) string {
 	for i, a := range args {

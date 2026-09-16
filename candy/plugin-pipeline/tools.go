@@ -9,12 +9,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/shared"
 	"github.com/opencharly/plugin-gh/candy/plugin-gh/gh"
 	"gopkg.in/yaml.v3"
 )
 
 // tools.go — the agent tool catalog. Tools are capability REFERENCES declared per
-// stage; buildTools renders the function-tool JSON; dispatchTool executes calls.
+// stage; buildTools renders the SDK's function-tool params from the catalog;
+// dispatchTool executes calls.
 // PR tools -> ghkit (github.com/opencharly/plugin-gh/gh) — the CANONICAL GitHub
 // client (R3, RCA 2026.252.2233: the hand-rolled exec.Command("gh") subprocesses
 // swallowed gh's stderr and depended on the ambient env that never reaches the
@@ -23,39 +26,31 @@ import (
 
 func jsonStr(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-type toolFn struct{ name, desc string }
+type toolFn struct {
+	name   string
+	desc   string
+	params json.RawMessage
+}
 
-func fn(name, desc string) toolSchema {
-	return fnArgs(name, desc, map[string]any{}, []string{})
+// fn: a tool with no declared parameters (the SDK omits the parameters object).
+func fn(name, desc string) toolFn {
+	return toolFn{name: name, desc: desc}
 }
 
 // fnArgs: a tool with a REAL parameter schema — the model must be able to pass
 // the stage/path it targets (RCA 2026.252.2250: the ledger tools dispatched
 // but the empty property schema meant every call arrived arg-less).
-func fnArgs(name, desc string, props map[string]any, required []string) toolSchema {
-	return toolSchema{Type: "function", Function: functionSchema{
-		Name: name, Description: desc,
-		Parameters: json.RawMessage(jsonStr(map[string]any{"type": "object", "properties": props, "required": required})),
-	}}
+func fnArgs(name, desc string, props map[string]any, required []string) toolFn {
+	b, _ := json.Marshal(map[string]any{"type": "object", "properties": props, "required": required})
+	return toolFn{name: name, desc: desc, params: json.RawMessage(b)}
 }
 
-var toolCatalog = map[string][]toolSchema{
+var toolCatalog = map[string][]toolFn{
 	"pr": {
 		fn("get_pr_diff", "CURRENT unified diff (head vs base) of the PR."),
 		fn("get_pr_commits", "Commit history of the PR (sha, message, author)."),
 		fn("get_pr_thread", "CURRENT live issue body (authoritative) plus all prior comments."),
 		fn("get_pr_meta", "PR metadata: title, state, draft, mergeable, head/base refs, file count."),
-	},
-	"pipeline": {
-		fn("media_gate", "Assert the media artifacts exist with the min sizes."),
-		fn("lock_audit", "Assert zero write-lock incidents in the run trees."),
-		fn("evidence_audit", "Audit media and locks for the evidence packet."),
-		fn("config_audit", "CONFIG AUDIT: the oracle bed against the lane rules."),
-		fn("resolve_channel", "Resolve the PR channel from the channels registry."),
-		fn("head_freshness", "Assert the plan head SHA equals the live PR head."),
-		fn("sequencing", "The deterministic sequencing gate."),
-		fn("golden_present", "Assert the golden disk exists and is unheld."),
-		fn("lanes_ok", "Report the concurrency budget."),
 	},
 	"ledger": {
 		fnArgs("stage_output", "Read a prior stage output from THIS RUN's ledger.", map[string]any{"stage": map[string]any{"type": "string", "description": "the stage id (e.g. triage, eval)"}}, []string{"stage"}),
@@ -64,20 +59,47 @@ var toolCatalog = map[string][]toolSchema{
 	},
 }
 
-func buildTools(refs []string) []toolSchema {
-	var out []toolSchema
+// REMOVED: the `pipeline` agent-tool group. It declared NINE tools with EMPTY
+// parameter schemas (fn, not fnArgs) and dispatched them with an EMPTY input
+// map (`runProbe(name, map[string]any{})`), so every one of them either passed
+// VACUOUSLY (lock_audit over no trees) or failed spuriously (config_audit
+// needs a bed, golden_present needs a golden) — the exact "every call arrived
+// arg-less" class this file's own header RCA'd for the ledger tools. It was
+// also UNUSED (no skill advertises those tool names; no stage declares
+// `tools: [pipeline]`) and DUPLICATED the deterministic probe surface, which
+// already exists canonically and schema-validated as the `probe:` STAGE
+// (the lane drives `verbs: [ledger_gate]`). Per R3 (one canonical
+// implementation per behavior) and R5 (delete legacy completely), the broken
+// duplicate is deleted rather than taught to shadow the probe stages.
+
+// buildTools renders the declared tool references into the SDK's function-tool
+// params. The catalog is the wire source; the SDK owns the rendering.
+func buildTools(refs []string) []openai.ChatCompletionToolUnionParam {
+	var fns []toolFn
 	for _, ref := range refs {
 		group, ok := toolCatalog[strings.TrimSpace(ref)]
 		if !ok {
 			continue
 		}
-		out = append(out, group...)
+		fns = append(fns, group...)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Function.Name < out[j].Function.Name })
+	sort.SliceStable(fns, func(i, j int) bool { return fns[i].name < fns[j].name })
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(fns))
+	for _, f := range fns {
+		def := shared.FunctionDefinitionParam{Name: f.name}
+		if f.desc != "" {
+			def.Description = openai.String(f.desc)
+		}
+		if len(f.params) > 0 {
+			var schema map[string]any
+			if json.Unmarshal(f.params, &schema) == nil {
+				def.Parameters = shared.FunctionParameters(schema)
+			}
+		}
+		out = append(out, openai.ChatCompletionFunctionTool(def))
+	}
 	return out
 }
-
-func toolFail(msg string) string { return jsonStr(map[string]string{"status": "fail", "message": msg}) }
 
 // ghClient is a PROCESS-WIDE lazily-built client (http.Client is concurrency-
 // safe; the client carries no per-lane state — the race lesson of RCA
@@ -92,18 +114,12 @@ func ghc() *gh.Client {
 	return ghClient
 }
 
-// dispatchTool executes one tool call.
+// dispatchTool executes one tool call. The argument string is the model's JSON
+// argument object for the tool's declared schema.
 func dispatchTool(name, arguments string, rc *runCtx) string {
 	switch name {
 	case "get_pr_diff", "get_pr_commits", "get_pr_thread", "get_pr_meta":
 		return prTool(name, rc)
-	case "media_gate", "lock_audit", "evidence_audit", "config_audit", "resolve_channel",
-		"head_freshness", "sequencing", "golden_present", "lanes_ok":
-		ok, msg := runProbe(name, map[string]any{})
-		if !ok {
-			return toolFail(msg)
-		}
-		return jsonStr(map[string]string{"status": "pass"})
 	case "stage_output":
 		return stageOutputTool(arguments, rc)
 	case "run_outcomes":

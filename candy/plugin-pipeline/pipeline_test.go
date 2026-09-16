@@ -97,18 +97,25 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 		if req.URL.Path != "/chat/completions" {
 			t.Errorf("bad path %s", req.URL.Path)
 		}
-		var cr chatRequest
-		if err := json.NewDecoder(req.Body).Decode(&cr); err != nil {
+		var body struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+			Tools  []any `json:"tools"`
+			Stream bool  `json:"stream"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Errorf("decode: %v", err)
 		}
-		if len(cr.Messages) != 2 || cr.Messages[0].Role != "system" ||
-			!strings.Contains(*cr.Messages[0].Content, "EVAL_ORACLE_MARKER") {
+		if len(body.Messages) != 2 || body.Messages[0].Role != "system" ||
+			!strings.Contains(body.Messages[0].Content, "EVAL_ORACLE_MARKER") {
 			t.Errorf("system prompt not passed verbatim")
 		}
-		if len(cr.Tools) == 0 {
+		if len(body.Tools) == 0 {
 			t.Errorf("tools not attached")
 		}
-		if !cr.Stream {
+		if !body.Stream {
 			t.Errorf("the agent call must set stream:true (the idle bound requires SSE)")
 		}
 		writeSSEContent(rw, "ok")
