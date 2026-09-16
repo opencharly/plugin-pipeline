@@ -49,9 +49,15 @@ type runCtx struct {
 	ledger  *ledger        // PER-RUN stage ledger — never shared (RCA 2026.252.2210: the package-global curLedger raced concurrent batch lanes)
 	ex      *sdk.Executor  // the host executor (single dial) for the ADE verb dispatch
 	report  map[string]any // the entity's report: block (template/schema/bed_template)
-	llm     map[string]any // the entity's llm block (base_url/model/api_key)
-	media   map[string]any // the entity's media: block (files/min/dir)
-	skills  map[string]any // the entity's skills: block (corpus) — the agent-stage skill corpus
+	// llm is the entity's llm block as its GENERATED type. It was
+	// `map[string]any` assigned via `mm(p.Llm)` — the identical defect already
+	// RCA'd for `media` below: p.Llm is a STRUCT (params.LLMSpec), mm() asserts a
+	// map and returns nil, so the authored llm: block was ALWAYS silently
+	// ignored and every lane fell through to the env/default layers. Typing the
+	// field removes the assertion (and the failure mode) entirely.
+	llm    params.LLMSpec
+	media  map[string]any // the entity's media: block (files/min/dir)
+	skills map[string]any // the entity's skills: block (corpus) — the agent-stage skill corpus
 }
 
 // StageResult is one ledger row.
@@ -264,7 +270,10 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 		}
 	}
 	rc.report = mm(mapOf(p.Report))
-	rc.llm = mm(p.Llm)
+	// p.Llm is a STRUCT (params.LLMSpec) — assign it DIRECTLY. The former
+	// `mm(p.Llm)` was the identical map-assertion defect fixed for media below
+	// and made the authored llm: block a silent no-op.
+	rc.llm = p.Llm
 	// p.Media is a STRUCT (params.MediaSpec), not a map — mm()'s map assertion
 	// returns nil for it, so the pipeline-level media.dir was never visible to the
 	// media stage (which then fell back to the legacy media/pr-<pr>-<calver>

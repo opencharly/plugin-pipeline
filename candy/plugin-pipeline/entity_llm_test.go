@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 )
 
 func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
@@ -34,7 +36,7 @@ func TestEntityLLMPrecedence(t *testing.T) {
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL) // the endpoint must be the test server (reachability)
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	t.Setenv("EVAL_LLM_API_KEY", "env-key")
-	rc := &runCtx{llm: map[string]any{"model": "entity-model", "api_key": "entity-key"}}
+	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model", Api_key: "entity-key"}}
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
@@ -55,7 +57,7 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 	srv := startLLM(t, &seen)
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	t.Setenv("EVAL_LLM_MODEL", "entity-model") // the entity-layer model via the env passthrough
-	rc := &runCtx{llm: map[string]any{}}       // no api_key anywhere
+	rc := &runCtx{llm: params.LLMSpec{}}       // no api_key anywhere
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
@@ -69,11 +71,15 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 // built-in default (the LOCAL ollama server model) applies. FAILS without the
 // deepseek-v4.1-flash:cloud default (the V4.0->V4.1 cutover).
 func TestLLMDefaultModel(t *testing.T) {
-	if got := llmModel(nil); got != "deepseek-v4.1-flash:cloud" {
-		t.Errorf("llmModel default: got %q, want \"deepseek-v4.1-flash:cloud\"", got)
+	got := resolveLLM(nil, nil)
+	if got.model != "deepseek-v4.1-flash:cloud" {
+		t.Errorf("default model: got %q, want \"deepseek-v4.1-flash:cloud\"", got.model)
 	}
-	if got := llmBaseURL(nil); got != "http://localhost:11434/v1" {
-		t.Errorf("llmBaseURL default: got %q, want http://localhost:11434/v1", got)
+	if got.baseURL != "http://localhost:11434/v1" {
+		t.Errorf("default base_url: got %q, want http://localhost:11434/v1", got.baseURL)
+	}
+	if got.apiKey != "" {
+		t.Errorf("default api_key must be ABSENT, got %q", got.apiKey)
 	}
 }
 
@@ -89,16 +95,16 @@ func TestLLMDefaultModel(t *testing.T) {
 func TestChatStreamsAndAssemblesToolCalls(t *testing.T) {
 	var sawStream bool
 	srv := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, req *http.Request) {
-		var cr chatRequest
-		_ = json.NewDecoder(req.Body).Decode(&cr)
-		sawStream = cr.Stream
+		var body map[string]any
+		_ = json.NewDecoder(req.Body).Decode(&body)
+		sawStream, _ = body["stream"].(bool)
 		writeSSEToolCall(rw, "call_1", "run_outcomes", `{"bed":"check-x"}`)
 	}))
 	defer srv.Close()
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	t.Setenv("EVAL_LLM_MODEL", "mock")
 
-	msg, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	msg, err := chat(t.Context(), nil, nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
 	if err != nil {
 		t.Fatalf("chat: %v", err)
 	}
@@ -109,7 +115,7 @@ func TestChatStreamsAndAssemblesToolCalls(t *testing.T) {
 		t.Fatalf("tool calls: got %d, want 1 (assembled from SSE deltas)", len(msg.ToolCalls))
 	}
 	tc := msg.ToolCalls[0]
-	if tc.ID != "call_1" || tc.Function.Name != "run_outcomes" || tc.Function.Arguments != `{"bed":"check-x"}` {
+	if tc.ID != "call_1" || tc.Name != "run_outcomes" || tc.Arguments != `{"bed":"check-x"}` {
 		t.Errorf("assembled tool call = %+v, want id/name/args from the delta fragments", tc)
 	}
 }
@@ -143,7 +149,7 @@ func TestChatIdleWatchdogBoundsAStall(t *testing.T) {
 	t.Setenv("EVAL_LLM_IDLE_TIMEOUT", "150ms")
 
 	start := time.Now()
-	_, err := chat(t.Context(), nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
+	_, err := chat(t.Context(), nil, nil, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
 	elapsed := time.Since(start)
 	if err == nil {
 		t.Fatal("a stalled stream must fail, got nil error")

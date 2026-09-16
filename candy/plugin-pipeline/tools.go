@@ -9,12 +9,15 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/shared"
 	"github.com/opencharly/plugin-gh/candy/plugin-gh/gh"
 	"gopkg.in/yaml.v3"
 )
 
 // tools.go — the agent tool catalog. Tools are capability REFERENCES declared per
-// stage; buildTools renders the function-tool JSON; dispatchTool executes calls.
+// stage; buildTools renders the SDK's function-tool params from the catalog;
+// dispatchTool executes calls.
 // PR tools -> ghkit (github.com/opencharly/plugin-gh/gh) — the CANONICAL GitHub
 // client (R3, RCA 2026.252.2233: the hand-rolled exec.Command("gh") subprocesses
 // swallowed gh's stderr and depended on the ambient env that never reaches the
@@ -23,23 +26,26 @@ import (
 
 func jsonStr(v any) string { b, _ := json.Marshal(v); return string(b) }
 
-type toolFn struct{ name, desc string }
+type toolFn struct {
+	name   string
+	desc   string
+	params json.RawMessage
+}
 
-func fn(name, desc string) toolSchema {
-	return fnArgs(name, desc, map[string]any{}, []string{})
+// fn: a tool with no declared parameters (the SDK omits the parameters object).
+func fn(name, desc string) toolFn {
+	return toolFn{name: name, desc: desc}
 }
 
 // fnArgs: a tool with a REAL parameter schema — the model must be able to pass
 // the stage/path it targets (RCA 2026.252.2250: the ledger tools dispatched
 // but the empty property schema meant every call arrived arg-less).
-func fnArgs(name, desc string, props map[string]any, required []string) toolSchema {
-	return toolSchema{Type: "function", Function: functionSchema{
-		Name: name, Description: desc,
-		Parameters: json.RawMessage(jsonStr(map[string]any{"type": "object", "properties": props, "required": required})),
-	}}
+func fnArgs(name, desc string, props map[string]any, required []string) toolFn {
+	b, _ := json.Marshal(map[string]any{"type": "object", "properties": props, "required": required})
+	return toolFn{name: name, desc: desc, params: json.RawMessage(b)}
 }
 
-var toolCatalog = map[string][]toolSchema{
+var toolCatalog = map[string][]toolFn{
 	"pr": {
 		fn("get_pr_diff", "CURRENT unified diff (head vs base) of the PR."),
 		fn("get_pr_commits", "Commit history of the PR (sha, message, author)."),
@@ -64,16 +70,32 @@ var toolCatalog = map[string][]toolSchema{
 	},
 }
 
-func buildTools(refs []string) []toolSchema {
-	var out []toolSchema
+// buildTools renders the declared tool references into the SDK's function-tool
+// params. The catalog is unchanged; only the wire rendering is the SDK's.
+func buildTools(refs []string) []openai.ChatCompletionToolUnionParam {
+	var fns []toolFn
 	for _, ref := range refs {
 		group, ok := toolCatalog[strings.TrimSpace(ref)]
 		if !ok {
 			continue
 		}
-		out = append(out, group...)
+		fns = append(fns, group...)
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Function.Name < out[j].Function.Name })
+	sort.SliceStable(fns, func(i, j int) bool { return fns[i].name < fns[j].name })
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(fns))
+	for _, f := range fns {
+		def := shared.FunctionDefinitionParam{Name: f.name}
+		if f.desc != "" {
+			def.Description = openai.String(f.desc)
+		}
+		if len(f.params) > 0 {
+			var schema map[string]any
+			if json.Unmarshal(f.params, &schema) == nil {
+				def.Parameters = shared.FunctionParameters(schema)
+			}
+		}
+		out = append(out, openai.ChatCompletionFunctionTool(def))
+	}
 	return out
 }
 
