@@ -1,7 +1,11 @@
 package pluginpipeline
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"os"
 	"strings"
@@ -9,7 +13,25 @@ import (
 	"time"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/sdk/llmkit"
 )
+
+// solidDataURL renders a w x h solid-RGB PNG as an OpenAI image data URL.
+func solidDataURL(t *testing.T, w, h int, r, g, b uint8) string {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	c := color.RGBA{R: r, G: g, B: b, A: 255}
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.Set(x, y, c)
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("encoding the PNG fixture: %v", err)
+	}
+	return llmkit.ImageDataURL("image/png", buf.Bytes())
+}
 
 // llm_live_test.go — the R10 live proof. It drives the REAL openai-go client
 // against the REAL local ollama endpoint (not a mock), exercising the full path:
@@ -118,4 +140,50 @@ func TestLive_OllamaReasoningIsCaptured(t *testing.T) {
 		t.Fatalf("the live model returned NO reasoning-bearing output, so the non-standard `reasoning` read is UNOBSERVED (the rewired engine's preservation claim is unproven)")
 	}
 	t.Logf("LIVE REASONING observed: %d bytes; content=%q", len(msg.Reasoning), *msg.Content)
+}
+
+// TestLive_OllamaVisionAdapter: the engine's SHIPPED chatVision adapter against the
+// REAL endpoint. The conformance test uses a mock; this proves the adapter's
+// content-parts path (image → base64 data URL) reaches a real vision model, so the
+// changed chatVision() path has LIVE coverage, not just mock coverage.
+func TestLive_OllamaVisionAdapter(t *testing.T) {
+	if !ollamaUp(t) {
+		t.Skip("no ollama endpoint at " + liveBaseURL)
+	}
+	t.Setenv("EVAL_LLM_BASE_URL", liveBaseURL)
+	t.Setenv("EVAL_LLM_MODEL", liveModel())
+
+	// a 64x64 SOLID RED image (unambiguous to a vision model; a 1x1 pixel reads as
+	// pinkish when upscaled — the same fixture lesson as the shared client's suite).
+	img := solidDataURL(t, 64, 64, 255, 0, 0)
+	reply, err := chatVision(t.Context(), nil, nil,
+		"Reply with ONLY the dominant color word, nothing else.", []string{img})
+	if err != nil {
+		t.Fatalf("live chatVision adapter: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(reply), "red") {
+		t.Fatalf("the live model did not identify the solid red image: %q", reply)
+	}
+	t.Logf("LIVE VISION (engine adapter): %q", reply)
+}
+
+// TestLive_OllamaVisionWrongExpectation: the SAME adapter path with a deliberately
+// wrong assertion must FAIL, proving the adapter surfaces the answer rather than a
+// canned pass.
+func TestLive_OllamaVisionWrongExpectation(t *testing.T) {
+	if !ollamaUp(t) {
+		t.Skip("no ollama endpoint at " + liveBaseURL)
+	}
+	t.Setenv("EVAL_LLM_BASE_URL", liveBaseURL)
+	t.Setenv("EVAL_LLM_MODEL", liveModel())
+	img := solidDataURL(t, 64, 64, 0, 255, 0) // green
+	reply, err := chatVision(t.Context(), nil, nil,
+		"Reply with ONLY the dominant color word, nothing else.", []string{img})
+	if err != nil {
+		t.Fatalf("live chatVision adapter: %v", err)
+	}
+	if strings.Contains(strings.ToLower(reply), "blue") {
+		t.Fatalf("the model should not call a green image blue: %q", reply)
+	}
+	t.Logf("LIVE VISION (engine adapter, wrong-expectation discriminator): %q", reply)
 }
