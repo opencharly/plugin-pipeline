@@ -86,8 +86,10 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 	//    the TYPE of every leaf (an array stays an array, a map a map), so the
 	//    CUE validation sees the real shape — never a stringified one. A string
 	//    leaf containing ${name} markers is a per-marker TEMPLATE rendered
-	//    against `vars` (the same grammar as generate, but the result is a
-	//    STRUCTURED string leaf — the CUE encoder then quotes it correctly).
+	//    against `vars` with the SHARED MARKER SYNTAX but emit's OWN transform
+	//    set (json/yaml/indent/bullets; a bare ${name} is the scalar default;
+	//    `negate` is rejected — see emitValidTransforms). The result is a
+	//    STRUCTURED string leaf, so the CUE encoder quotes it correctly.
 	vars := mm(raw["vars"])
 	value, err := rc.resolveEmitValue(anyMap(raw["value"]), vars)
 	if err != nil {
@@ -147,10 +149,11 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 
 // resolveEmitValue is the `emit` stage's value resolver: like resolveValue, but a
 // string leaf containing ${var} markers is rendered as a TEMPLATE against vars
-// (the per-marker grammar: `${v}`, `${v:indent}`, `${v:bullets}`, `${v:yaml}`),
-// while a string leaf without markers is plain ref-resolved. The RESULT is always
-// a structured string, so the CUE encoder owns YAML quoting — the difference from
-// `generate`, where the template IS the file.
+// with emit's OWN transform set (emitValidTransforms: `${v:json}`, `${v:yaml}`,
+// `${v:indent}`, `${v:bullets}`, and a bare `${v}` scalar default), while a string
+// leaf without markers is plain ref-resolved. The RESULT is always a structured
+// string, so the CUE encoder owns YAML quoting — the difference from `generate`,
+// where the template IS the file.
 func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
 	switch t := v.(type) {
 	case string:

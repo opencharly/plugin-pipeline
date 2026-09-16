@@ -291,9 +291,10 @@ func TestEmitStage_RejectsNegateTransform(t *testing.T) {
 }
 
 // TestEmitStage_StringLeafTemplate pins the composition path: a prose field (the
-// user-voice report) is assembled from vars with the SAME per-marker grammar as
-// generate, but its result is a STRUCTURED string leaf — the CUE encoder quotes
-// it and block-scalars it, so a colon in the prose can never break the YAML.
+// user-voice report) is assembled from vars with the SHARED MARKER SYNTAX but
+// emit's OWN transform set (json/yaml/indent/bullets; bare ${name} = scalar;
+// `negate` rejected), and its result is a STRUCTURED string leaf — the CUE encoder
+// quotes it and block-scalars it, so a colon in the prose can never break the YAML.
 func TestEmitStage_StringLeafTemplate(t *testing.T) {
 	wd := t.TempDir()
 	stage := map[string]any{
