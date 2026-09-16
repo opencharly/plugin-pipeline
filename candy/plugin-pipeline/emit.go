@@ -13,7 +13,6 @@ import (
 	"cuelang.org/go/cue"
 	"cuelang.org/go/cue/cuecontext"
 	"cuelang.org/go/cue/errors"
-	cueyaml "cuelang.org/go/encoding/yaml"
 
 	"github.com/opencharly/spec/schemaconcat"
 )
@@ -83,27 +82,23 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 	//    against `vars` (the same grammar as generate, but the result is a
 	//    STRUCTURED string leaf — the CUE encoder then quotes it correctly).
 	vars := mm(raw["vars"])
-	value := rc.resolveEmitValue(anyMap(raw["value"]), vars)
+	value, err := rc.resolveEmitValue(anyMap(raw["value"]), vars)
+	if err != nil {
+		return err
+	}
 	valMap, ok := value.(map[string]any)
 	if !ok {
 		return errString("emit: value must be a mapping")
 	}
 
-	// 2. Compile the schema and validate the assembled value BEFORE any write.
+	// 2. Compile the schema and marshal the assembled value — the ONE
+	//    schema-first writer shared with the internal ledger dump (R3): it
+	//    validates against the schema with Concreteness required BEFORE any
+	//    bytes exist.
 	schemaVal, err := emitSchema(rc.workdir, schema)
 	if err != nil {
 		return err
 	}
-	outVal := emitCtx.Encode(valMap)
-	if outVal.Err() != nil {
-		return fmt.Errorf("emit: encode value: %w", outVal.Err())
-	}
-	if err := outVal.Unify(schemaVal).Validate(cue.Concrete(true)); err != nil {
-		return fmt.Errorf("emit: value violates %s:\n%s", schema, errors.Details(err, nil))
-	}
-
-	// 3. Marshal through the CUE yaml encoder (correct quoting/escaping by
-	//    construction — the bug class a hand-rolled template reintroduces).
 	format := s(raw["format"])
 	if format == "" {
 		format = "yaml"
@@ -111,11 +106,16 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 	var body []byte
 	switch format {
 	case "yaml":
-		body, err = cueyaml.Encode(outVal.Unify(schemaVal))
+		body, err = marshalSchemaFirst(schemaVal, valMap)
 		if err != nil {
-			return fmt.Errorf("emit: yaml encode: %w", err)
+			return fmt.Errorf("emit: value violates %s: %w", schema, err)
 		}
 	case "json":
+		// JSON is a YAML subset: still validate against the schema FIRST, then
+		// marshal as JSON.
+		if _, err := marshalSchemaFirst(schemaVal, valMap); err != nil {
+			return fmt.Errorf("emit: value violates %s: %w", schema, err)
+		}
 		body, err = json.Marshal(valMap)
 		if err != nil {
 			return fmt.Errorf("emit: json encode: %w", err)
@@ -144,7 +144,7 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 // while a string leaf without markers is plain ref-resolved. The RESULT is always
 // a structured string, so the CUE encoder owns YAML quoting — the difference from
 // `generate`, where the template IS the file.
-func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) any {
+func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
 	switch t := v.(type) {
 	case string:
 		// $report.<key> names a string in the entity's report: block (the prose
@@ -156,21 +156,29 @@ func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) any {
 		if strings.Contains(t, "${") {
 			return rc.renderStringLeaf(t, vars)
 		}
-		return rc.resolveValue(t)
+		return rc.resolveValue(t), nil
 	case map[string]any:
 		m := map[string]any{}
 		for k, x := range t {
-			m[k] = rc.resolveEmitValue(x, vars)
+			rv, err := rc.resolveEmitValue(x, vars)
+			if err != nil {
+				return nil, err
+			}
+			m[k] = rv
 		}
-		return m
+		return m, nil
 	case []any:
 		out := make([]any, len(t))
 		for i, x := range t {
-			out[i] = rc.resolveEmitValue(x, vars)
+			rv, err := rc.resolveEmitValue(x, vars)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = rv
 		}
-		return out
+		return out, nil
 	default:
-		return v
+		return v, nil
 	}
 }
 
@@ -193,8 +201,19 @@ func (rc *runCtx) reportRef(ref string) (string, bool) {
 // against vars, returning a plain string. It reuses the SAME transforms as
 // `generate` (indent/bullets/yaml/json/scalar) but never emits a YAML fragment
 // itself — the leaf is a value the CUE encoder serializes.
-func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) string {
-	return tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+//
+// HARD ERRORS, matching the generate grammar's contract (R1/R4): an UNKNOWN
+// transform and an UNRESOLVED ${name} are stage failures, never a silent
+// passthrough. A CUE `string` leaf cannot catch a leftover `${x:bogus}`, so
+// returning the marker unchanged would ship a corrupt artifact — exactly the
+// bug class this stage exists to remove. `@github...` candy refs stay literal
+// (the @-grammar would otherwise eat the prefix) and are NOT a var miss.
+func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) (string, error) {
+	var renderErr error
+	out := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		if renderErr != nil {
+			return m
+		}
 		if strings.HasPrefix(m, "@github") {
 			return m
 		}
@@ -204,12 +223,20 @@ func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) string {
 			m = m[:i] + "}"
 		}
 		if transform != "" && !validTransforms[transform] {
-			return m // unknown transform: leave the marker for the schema to catch
+			renderErr = errString("emit: unknown marker transform :" + transform +
+				" (valid: negate, json, yaml, indent, bullets)")
+			return m
 		}
 		key := strings.Trim(m, "${}@")
 		v, ok := vars[key]
 		if !ok {
-			return rc.resolveRefs(m)
+			// A ${name} that resolves through the ref grammar ($env/$pr/@stage)
+			// is legitimate; one that resolves to nothing is a typo and a FAIL.
+			if resolved := rc.resolveRefs(m); resolved != m {
+				return resolved
+			}
+			renderErr = errString("emit: unresolved marker " + m + " (not in vars and not a resolvable ref)")
+			return m
 		}
 		val := rc.resolveValue(v)
 		switch transform {
@@ -235,6 +262,10 @@ func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) string {
 			return scalar(val)
 		}
 	})
+	if renderErr != nil {
+		return "", renderErr
+	}
+	return out, nil
 }
 
 // emitSchema resolves the `schema` field to a compiled CUE value. A bare def

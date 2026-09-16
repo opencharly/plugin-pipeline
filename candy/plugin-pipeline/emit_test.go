@@ -112,6 +112,84 @@ func TestEmitStage_RejectsSchemaViolation(t *testing.T) {
 	}
 }
 
+// TestDumpLedger_SchemaFirst is the R10 coverage for the ledger-dump rewrite: a
+// row whose message contains ": " and a multi-line message must round-trip
+// through a parser. The former hand-rolled fmt.Fprintf writer was the same class
+// as the free-form record template.
+func TestDumpLedger_SchemaFirst(t *testing.T) {
+	wd := t.TempDir()
+	l := newLedger()
+	l.put(&StageResult{
+		ID: "gate", Kind: "probe", Status: "ok",
+		Message: "verdict: PASS — multi\nline: message",
+		Outputs: map[string]any{"executed_checks": 3},
+	})
+	l.put(&StageResult{ID: "eval", Kind: "ade", Status: "fail", Trigger: "setup-defect", Message: "boom: x"})
+	path := filepath.Join(wd, "stage-findings.yml")
+	if err := dumpLedger(l, path); err != nil {
+		t.Fatalf("dumpLedger: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []map[string]any
+	if err := yaml.Unmarshal(b, &rows); err != nil {
+		t.Fatalf("ledger dump is not valid YAML: %v\n%s", err, b)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2\n%s", len(rows), b)
+	}
+	// dumpLedger sorts by stage id, so find the row by its stage name.
+	var got string
+	for _, r := range rows {
+		if r["stage"] == "gate" {
+			got, _ = r["message"].(string)
+		}
+	}
+	if got != "verdict: PASS — multi\nline: message" {
+		t.Fatalf("multiline colon message did not round-trip: %q", got)
+	}
+}
+
+// TestEmitStage_RejectsUnresolvedMarker pins the hard-error contract: a ${name}
+// that is neither a var nor a resolvable ref must FAIL the stage, never ship a
+// literal marker (an invalid artifact by the exact class this stage removes).
+func TestEmitStage_RejectsUnresolvedMarker(t *testing.T) {
+	wd := t.TempDir()
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "#T: {body!: string}",
+		"value":  map[string]any{"body": "hello ${nope}"},
+		"out":    wd + "/t.yml",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+		t.Fatal("emit with an unresolved marker: want an error, got nil")
+	}
+}
+
+// TestEmitStage_RejectsUnknownTransform pins the same contract for a bad
+// transform, matching the generate grammar's documented hard error.
+func TestEmitStage_RejectsUnknownTransform(t *testing.T) {
+	wd := t.TempDir()
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "#T: {body!: string}",
+		"vars":   map[string]any{"body": "x"},
+		"value":  map[string]any{"body": "${body:bogus}"},
+		"out":    wd + "/t.yml",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+		t.Fatal("emit with an unknown transform: want an error, got nil")
+	}
+}
+
 // TestEmitStage_StringLeafTemplate pins the composition path: a prose field (the
 // user-voice report) is assembled from vars with the SAME per-marker grammar as
 // generate, but its result is a STRUCTURED string leaf — the CUE encoder quotes

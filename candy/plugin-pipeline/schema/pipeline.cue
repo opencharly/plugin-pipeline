@@ -74,10 +74,17 @@
 // produces therefore CANNOT be malformed: a value that violates the schema fails
 // the stage informatively, exactly like an ingress kind body.
 //
-//   schema: a CUE def name (e.g. #EvalRecord) in the plugin's own served schema
-//           OR a literal CUE source string; the emitted value is unified against
-//           it with Concreteness required — an unknown field or a wrong-typed
-//           field is a stage failure, never a silent drop.
+//   schema: one of THREE forms, each unified against `value` with Concreteness
+//           required (an unknown or wrong-typed field is a stage failure, never a
+//           silent drop):
+//             1. a bare def NAME (`#StageFindings`) resolving in the plugin's own
+//                served schema (schema/pipeline.cue);
+//             2. a `.cue` FILE path (`candy/eval-pr/record.cue`, project-relative
+//                to the run workdir) — the strongest form, a committed and
+//                reviewable schema the project owns; a `#Def` suffix
+//                (`record.cue#NotTestableRecord`) selects a def explicitly, a
+//                bare path uses the file's first `#Def`;
+//             3. a literal CUE source string (a self-contained def block).
 //   value:  a structured map assembled from refs (@stage.output, $pr, $env.NAME).
 //           Every leaf resolves through the ref grammar; nested maps/lists are
 //           resolved recursively (resolveValue), so `@oracle.checks` lands as a

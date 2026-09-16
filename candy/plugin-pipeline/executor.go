@@ -699,7 +699,11 @@ func dumpLedger(l *ledger, path string) error {
 		}
 		rows = append(rows, row)
 	}
-	body, err := marshalSchemaFirst("#StageFindings", rows)
+	def, err := emitSchemaDef("#StageFindings")
+	if err != nil {
+		return err
+	}
+	body, err := marshalSchemaFirst(def, rows)
 	if err != nil {
 		return err
 	}
@@ -707,27 +711,35 @@ func dumpLedger(l *ledger, path string) error {
 	return os.WriteFile(path, body, 0o644)
 }
 
-// marshalSchemaFirst validates a value against a def in the plugin schema and
-// marshals it to YAML — the ONE schema-first writer the `emit` stage and the
-// internal dumps share (R3). `rows` may be a list (validated element-wise) or a
-// single mapping.
-func marshalSchemaFirst(def string, value any) ([]byte, error) {
-	root, err := emitPluginSchema()
-	if err != nil {
-		return nil, err
-	}
-	d := root.LookupPath(cue.ParsePath(def))
-	if !d.Exists() {
-		return nil, fmt.Errorf("schema def %s not found", def)
-	}
+// marshalSchemaFirst is the ONE schema-first writer the `emit` stage and the
+// internal ledger dump share (R3): it validates `value` against a COMPILED
+// schema value with Concreteness required, then marshals it through the CUE YAML
+// encoder — correct quoting/escaping by construction, and no bytes exist until
+// the value has passed the schema.
+func marshalSchemaFirst(schemaVal cue.Value, value any) ([]byte, error) {
 	v := emitCtx.Encode(value)
 	if v.Err() != nil {
 		return nil, v.Err()
 	}
-	if err := v.Unify(d).Validate(cue.Concrete(true)); err != nil {
-		return nil, fmt.Errorf("%s: %s", def, errors.Details(err, nil))
+	u := v.Unify(schemaVal)
+	if err := u.Validate(cue.Concrete(true)); err != nil {
+		return nil, fmt.Errorf("%s", errors.Details(err, nil))
 	}
-	return cueyaml.Encode(v.Unify(d))
+	return cueyaml.Encode(u)
+}
+
+// emitSchemaDef resolves a def NAME in the plugin's own served schema (the
+// internal-dump counterpart of emitSchema's `#Def` form).
+func emitSchemaDef(name string) (cue.Value, error) {
+	root, err := emitPluginSchema()
+	if err != nil {
+		return cue.Value{}, err
+	}
+	d := root.LookupPath(cue.ParsePath(name))
+	if !d.Exists() {
+		return cue.Value{}, fmt.Errorf("schema def %s not found", name)
+	}
+	return d, nil
 }
 
 // runCheckRun invokes the EXISTING check executor (charly check run <bed>) —
