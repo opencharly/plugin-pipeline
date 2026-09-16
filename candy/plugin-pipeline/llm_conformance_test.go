@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/sdk/llmkit"
 )
 
 // llm_conformance_test.go — the proof that the authored #LLMSpec/#LLMParams
@@ -150,14 +151,12 @@ func TestConformance_Vision(t *testing.T) {
 			}
 		})
 
-	// The vision path is exercised through the SDK message union directly: this
-	// is the shape a future screenshot-vision verb will send.
-	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
-	parts := []any{
-		map[string]any{"type": "text", "text": "what is in this screenshot?"},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,iVBORw0KGgo="}},
-	}
-	if _, err := openaiUserPartsChat(t.Context(), nil, parts); err != nil {
+	// The vision path goes through the SHARED client's ChatVision (the engine's
+	// chatVision is a thin adapter over it), which sends exactly this shape.
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	cfg := llmkit.Default()
+	cfg.BaseURL = srv.URL
+	if _, err := llmkit.ChatVision(t.Context(), cfg, "what is in this screenshot?", []string{img}); err != nil {
 		t.Fatalf("vision chat: %v", err)
 	}
 }
@@ -321,14 +320,14 @@ func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 		Params: params.LLMParams{Temperature: &stageTemp},
 	}
 	got := resolveLLM(rc, stage)
-	if got.model != "stage-model" {
-		t.Errorf("model: stage must win, got %q", got.model)
+	if got.Model != "stage-model" {
+		t.Errorf("model: stage must win, got %q", got.Model)
 	}
-	if got.p.Temperature == nil || *got.p.Temperature != 0.1 {
-		t.Errorf("temperature: stage must win, got %v", got.p.Temperature)
+	if got.Params.Temperature == nil || *got.Params.Temperature != 0.1 {
+		t.Errorf("temperature: stage must win, got %v", got.Params.Temperature)
 	}
-	if got.p.Top_p == nil || *got.p.Top_p != 0.5 {
-		t.Errorf("top_p: the entity value must survive a stage override of another field, got %v", got.p.Top_p)
+	if got.Params.Top_p == nil || *got.Params.Top_p != 0.5 {
+		t.Errorf("top_p: the entity value must survive a stage override of another field, got %v", got.Params.Top_p)
 	}
 }
 
@@ -338,7 +337,7 @@ func TestConformance_EnvBeatsStageAndEntity(t *testing.T) {
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model"}}
 	stage := &params.StageLLMSpec{Model: "stage-model"}
-	if got := resolveLLM(rc, stage).model; got != "env-model" {
+	if got := resolveLLM(rc, stage).Model; got != "env-model" {
 		t.Fatalf("model: env must win, got %q", got)
 	}
 }
@@ -400,14 +399,14 @@ func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 		Max_retries:  &retries,
 	}}
 	got := resolveLLM(rc, nil)
-	if got.timeout.String() != "1m30s" {
-		t.Errorf("timeout: got %s, want 1m30s", got.timeout)
+	if got.Timeout.String() != "1m30s" {
+		t.Errorf("timeout: got %s, want 1m30s", got.Timeout)
 	}
-	if got.idleTimeout.String() != "45s" {
-		t.Errorf("idle_timeout: got %s, want 45s", got.idleTimeout)
+	if got.IdleTimeout.String() != "45s" {
+		t.Errorf("idle_timeout: got %s, want 45s", got.IdleTimeout)
 	}
-	if got.maxRetries != 0 {
-		t.Errorf("max_retries: got %d, want 0", got.maxRetries)
+	if got.MaxRetries != 0 {
+		t.Errorf("max_retries: got %d, want 0", got.MaxRetries)
 	}
 }
 
