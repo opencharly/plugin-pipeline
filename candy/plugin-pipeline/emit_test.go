@@ -270,6 +270,26 @@ func TestEmitStage_RejectsUnknownTransform(t *testing.T) {
 	}
 }
 
+// TestEmitStage_RejectsNegateTransform pins that the emit string-leaf grammar
+// does NOT advertise `negate` (it has no meaning for a string) and HARD-errors on
+// it rather than silently rendering the un-negated scalar.
+func TestEmitStage_RejectsNegateTransform(t *testing.T) {
+	wd := t.TempDir()
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "#T: {body!: string}",
+		"vars":   map[string]any{"body": "x"},
+		"value":  map[string]any{"body": "${body:negate}"},
+		"out":    wd + "/t.yml",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+		t.Fatal("emit with :negate on a string leaf: want an error, got nil")
+	}
+}
+
 // TestEmitStage_StringLeafTemplate pins the composition path: a prose field (the
 // user-voice report) is assembled from vars with the SAME per-marker grammar as
 // generate, but its result is a STRUCTURED string leaf — the CUE encoder quotes

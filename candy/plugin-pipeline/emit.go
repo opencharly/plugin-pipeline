@@ -45,6 +45,13 @@ var emitCtx = cuecontext.New()
 // string contains whitespace/colons and so never matches.
 var defNameRe = regexp.MustCompile(`^#[A-Za-z][A-Za-z0-9_]*$`)
 
+// emitValidTransforms is the transform set a STRING LEAF accepts. It is NOT the
+// generate set: `negate` has no meaning for a string leaf (there is no check to
+// negate), so it is rejected rather than silently rendered un-negated — the emit
+// grammar's whole point is that a value the code advertises is either implemented
+// or a hard error.
+var emitValidTransforms = map[string]bool{"json": true, "yaml": true, "indent": true, "bullets": true}
+
 // emitPluginSchema compiles the plugin's own served schema (schema/pipeline.cue
 // via the embedded FS) — the SAME source Describe publishes, so a def added
 // here is authorable by any pipeline entity without a second schema.
@@ -222,9 +229,9 @@ func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) (string, er
 			transform = strings.TrimSuffix(m[i+1:], "}")
 			m = m[:i] + "}"
 		}
-		if transform != "" && !validTransforms[transform] {
+		if transform != "" && !emitValidTransforms[transform] {
 			renderErr = errString("emit: unknown marker transform :" + transform +
-				" (valid: negate, json, yaml, indent, bullets)")
+				" (valid for a string leaf: json, yaml, indent, bullets)")
 			return m
 		}
 		key := strings.Trim(m, "${}@")
