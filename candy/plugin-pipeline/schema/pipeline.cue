@@ -139,6 +139,11 @@
 	status!:  string
 	trigger?: string
 	message?: string
+	// duration_seconds: the stage's wall-clock time. The runner has ALWAYS
+	// measured this (StageResult.Duration) but the dump DROPPED it, so the one
+	// artifact that could answer "where did the lane's 13 minutes go?" carried
+	// no timing at all. It is authored here so the dump is the timing record.
+	duration_seconds?: int & >=0
 	outputs?: {...}
 })
 #StageFindings: [...#StageFinding]
@@ -146,7 +151,7 @@
 // Probe verb inputs (deterministic, engine-native).
 #MediaGateInput:      { dir: string, files: [string], min: {[string]: int} }
 #LockAuditInput:      { trees: [string] }
-#SequencingInput:     { lanes: int, golden: string }
+#SequencingInput:     { bed_prefix: string, golden: string }
 #HeadFreshnessInput:  { plan_sha: string, pr: int, repo: string }
 #ConfigAuditInput:    { bed: string, pr: int }
 #ResolveChannelInput: { channel: string, channels: {[string]: { golden: string, provision: string } } }

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk"
 )
 
@@ -151,26 +152,43 @@ func restAfter(args []string, name string) []string {
 	return nil
 }
 
-// teardownVenue: the charly-native between-lane cleanup — `charly check stop`
-// for the lane's two beds (the sequencing gate then verifies a quiescent venue).
-func teardownVenue(pr, workdir string) error {
+// teardownLaneBeds: the between-lane venue hygiene — destroy the VM beds the
+// lane's own `ade` stages declared, by ENTITY NAME, best-effort.
+//
+// This is deliberately ENTITY-DRIVEN (R3 + the kernel/plugin boundary law). The
+// predecessor `teardownVenue` hardcoded the eval-omarchy golden
+// (`check-omarchy-eval-base-inst`) and a domain suffix scheme
+// (`check-omarchy-pr-<pr>-vm`, plus a `-vm-probe` suffix that no entity has) —
+// a lane's private layout baked into the generic engine, which also meant every
+// unrelated pipeline got an eval-omarchy-shaped teardown. The bed names are
+// already declared in the stages, so they are read from there and ref-resolved.
+//
+// `--if-exists` makes an already-absent venue a SUCCESS: without it, every clean
+// lane logged a spurious `no such VM … nothing destroyed`.
+func teardownLaneBeds(ctx context.Context, p params.PipelineInput, pr, calver, workdir string) {
 	charlyBin := os.Getenv("CHARLY_BIN")
 	if charlyBin == "" {
 		charlyBin = "charly"
 	}
-	// the charly-native venue destroy: `charly vm destroy <golden-entity>
-	// --domain <venued domain>` (the --domain WITHOUT the charly- prefix; the
-	// vm verb adds it). The sequencing gate then verifies a quiescent venue.
-	for _, suffix := range []string{"-vm-probe", "-vm"} {
-		args := []string{"vm", "destroy", "check-omarchy-eval-base-inst", "--domain", "check-omarchy-pr-" + pr + suffix}
+	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap()}
+	seen := map[string]bool{}
+	for _, raw := range p.Stages {
+		if asString(raw["kind"]) != "ade" {
+			continue
+		}
+		bed := strings.TrimSpace(rc.resolveRefs(asString(raw["bed"])))
+		if bed == "" || seen[bed] {
+			continue
+		}
+		seen[bed] = true
+		args := []string{"vm", "destroy", bed, "--if-exists"}
 		if workdir != "" {
 			args = append([]string{"-C", workdir}, args...)
 		}
-		cmd := exec.Command(charlyBin, args...)
+		cmd := exec.CommandContext(ctx, charlyBin, args...)
 		cmd.Env = os.Environ()
-		_ = cmd.Run()
+		_, _ = cmd.CombinedOutput()
 	}
-	return nil
 }
 
 func flagAfter(args []string, name string) string {

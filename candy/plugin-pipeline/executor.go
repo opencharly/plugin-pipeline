@@ -319,7 +319,7 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 			// FAIL-HARD — the trigger processing below restarts the chain from
 			// the target stage (the informed redo), bounded by the redo counters.
 			if workdir != "" {
-				_ = dumpLedger(l, filepath.Join(workdir, "stage-findings.yml"))
+				_ = dumpLedger(l, ledgerPath(workdir, pr))
 			}
 			return fmt.Errorf("[stage %s] FAIL-HARD: %w", id, err)
 		}
@@ -365,9 +365,30 @@ func runPlanL(ctx context.Context, p params.PipelineInput, pr, calver, workdir s
 		}
 	}
 	if workdir != "" {
-		_ = dumpLedger(l, filepath.Join(workdir, "stage-findings.yml"))
+		_ = dumpLedger(l, ledgerPath(workdir, pr))
 	}
 	return nil
+}
+
+// ledgerPath is the PER-LANE ledger-dump path.
+//
+// RCA: the dump was written to a FIXED `workdir/stage-findings.yml`, one path
+// for the whole process. The batch runs N lanes CONCURRENTLY in one process, so
+// every lane overwrote every other lane's dump: the surviving file belonged to
+// whichever lane finished last, and a FAILING lane's forensic artifact was
+// routinely destroyed by a sibling. This is the SAME per-lane-state defect the
+// ledger OBJECT already fixed (RCA 2026.252.2210 — "the package-global curLedger
+// raced concurrent batch lanes"); the isolation was never applied to the
+// dump PATH. Live-caught: a 2-lane run left ONE file containing one lane's 12
+// stages while two lanes ran.
+//
+// The lane with no PR (a generic single-entity run) keeps the bare name so a
+// non-batch invocation is unchanged.
+func ledgerPath(workdir, pr string) string {
+	if pr == "" {
+		return filepath.Join(workdir, "stage-findings.yml")
+	}
+	return filepath.Join(workdir, "stage-findings-pr-"+pr+".yml")
 }
 
 func statusSuffix(res *StageResult) string {
@@ -577,8 +598,12 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 			// the compiled-in placement: drive the bed's plan in-process (no charly spawn)
 			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, bed, rc.workdir, rc.ex)
 		} else {
-			// the un-compiled placement: the external charly check-run fallback
-			verdict, summary, aerr = adeVerdict(ctx, rc.pr, bed, rc.workdir)
+			// the un-compiled placement: the external charly check-run fallback.
+			// The lane's head comes from the run context (rc.env), NEVER the
+			// process env — the batch lanes are concurrent and the process env
+			// carries the operator's value or nothing (RCA: the live lane logged
+			// `--var PR_HEAD_SHA=`).
+			verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.env["PR_HEAD_SHA"], bed, rc.workdir)
 		}
 		if aerr != nil {
 			res.Status = "fail"
@@ -697,6 +722,11 @@ func dumpLedger(l *ledger, path string) error {
 	for _, id := range l.order {
 		r := l.results[id]
 		row := map[string]any{"stage": r.ID, "kind": r.Kind, "status": r.Status}
+		// the stage's wall-clock time — the runner has always measured it; the
+		// dump now RECORDS it, so the artifact answers "where did the time go?"
+		// (previously the dump carried no timing and the question was
+		// unanswerable from the run's own evidence).
+		row["duration_seconds"] = int(r.Duration.Seconds())
 		if r.Trigger != "" {
 			row["trigger"] = r.Trigger
 		}
@@ -749,33 +779,6 @@ func emitSchemaDef(name string) (cue.Value, error) {
 		return cue.Value{}, fmt.Errorf("schema def %s not found", name)
 	}
 	return d, nil
-}
-
-// runCheckRun invokes the EXISTING check executor (charly check run <bed>) —
-// the canonical bed runner, orchestrated by this engine. exit code 2 = step fail.
-func runCheckRun(ctx context.Context, bed, workdir string) int {
-	// the charly that runs the pipeline: CHARLY_BIN override (the runner pins the
-	// released binary; a dev/worktree charly on PATH resolves beds differently).
-	charlyBin := os.Getenv("CHARLY_BIN")
-	if charlyBin == "" {
-		charlyBin = "charly"
-	}
-	args := []string{"check", "run", bed}
-	if workdir != "" {
-		args = append([]string{"-C", workdir}, args...)
-	}
-	cmd := exec.CommandContext(ctx, charlyBin, args...)
-	cmd.Env = os.Environ()
-	_ = cmd.Run()
-	return cmd.ProcessState.ExitCode()
-}
-
-func teardownBed(bed string) error {
-	o, _ := exec.Command("charly", "check", "stop", bed).CombinedOutput()
-	_ = o
-	o2, _ := exec.Command("charly", "vm", "destroy", bed, "--if-exists").CombinedOutput()
-	_ = o2
-	return nil
 }
 
 // evalCondition: a minimal condition evaluator: "A == B && C in [X, Y]".

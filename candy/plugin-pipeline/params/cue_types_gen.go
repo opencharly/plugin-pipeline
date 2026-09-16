@@ -472,6 +472,12 @@ type StageFinding struct {
 
 	Message string `json:"message,omitempty"`
 
+	// duration_seconds: the stage's wall-clock time. The runner has ALWAYS
+	// measured this (StageResult.Duration) but the dump DROPPED it, so the one
+	// artifact that could answer "where did the lane's 13 minutes go?" carried
+	// no timing at all. It is authored here so the dump is the timing record.
+	Duration_seconds int64 `json:"duration_seconds,omitempty"`
+
 	Outputs map[string]any/* CUE top */ `json:"outputs,omitempty"`
 }
 
@@ -491,7 +497,7 @@ type LockAuditInput struct {
 }
 
 type SequencingInput struct {
-	Lanes int64 `json:"lanes"`
+	Bed_prefix string `json:"bed_prefix"`
 
 	Golden string `json:"golden"`
 }

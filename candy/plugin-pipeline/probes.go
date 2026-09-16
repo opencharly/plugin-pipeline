@@ -96,9 +96,6 @@ func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any
 	case "head_freshness":
 		ok, msg := probeHeadFreshness(input)
 		return ok, msg, nil
-	case "lanes_ok":
-		ok, msg := probeSequencing(input)
-		return ok, msg, nil
 	case "sequencing":
 		ok, msg := probeSequencing(input)
 		return ok, msg, nil
@@ -259,10 +256,18 @@ func readHead(p string) string {
 	return string(b)
 }
 
+// probeGoldenPresent: assert the golden disk exists, is non-empty, is unheld,
+// and (when a ref is declared) was built from the current source.
+//
+// `golden` is REQUIRED. The predecessor silently substituted a hardcoded
+// eval-omarchy path (`~/.local/share/charly/vm/charly-check-omarchy-eval-base-inst/…`)
+// — a lane's private layout baked into the generic engine, which made the probe
+// meaningless (and wrong) for any other project. A missing input is now an
+// explicit failure, never a silent default.
 func probeGoldenPresent(input map[string]any) (bool, string) {
 	golden := s(input["golden"])
 	if golden == "" {
-		golden = filepath.Join(os.Getenv("HOME"), ".local/share/charly/vm/charly-check-omarchy-eval-base-inst/snapshots/golden/disk.qcow2")
+		return false, "golden_present: golden required (the golden disk path)"
 	}
 	st, err := os.Stat(golden)
 	if err != nil || st.Size() == 0 {
@@ -291,22 +296,46 @@ func probeHeadFreshness(input map[string]any) (bool, string) {
 	if planSha == "" || repo == "" {
 		return false, "head_freshness: plan_sha + repo required"
 	}
-	out, err := exec.Command("gh", "api", fmt.Sprintf("/repos/%s/pulls/%s", repo, pr), "--jq", ".head.sha").Output()
-	if err != nil {
-		return false, "head_freshness: gh failed"
+	// the CANONICAL client (headSHA → ghkit), not a hand-rolled `gh` subprocess.
+	// The subprocess was the exact defect class tools.go's header RCA'd (RCA
+	// 2026.252.2233): it depended on the ambient env / a `gh` binary and
+	// swallowed the real diagnostic behind a bare "gh failed". headSHA talks to
+	// api.github.com directly with the explicit token contract.
+	live := headSHA(pr, repo)
+	if live == "" {
+		return false, "head_freshness: could not resolve the live head sha for " + repo + "#" + pr
 	}
-	if strings.TrimSpace(string(out)) != planSha {
-		return false, "head_freshness: plan head stale"
+	if live != planSha {
+		return false, "head_freshness: plan head stale (plan " + planSha + ", live " + live + ")"
 	}
 	return true, ""
 }
 
-var guestVmRe = regexp.MustCompile("guest=charly-check-omarchy-pr-[0-9]+-vm")
-
+// probeSequencing: the deterministic sequencing gate — assert no live batch VM
+// is present (a concurrent lane would contend for the golden).
+//
+// The guest pattern is DERIVED from the declared bed-name prefix, not hardcoded
+// to the eval-omarchy lane. The predecessor matched a literal
+// `guest=charly-check-omarchy-pr-<N>-vm`, so a project with any other bed
+// naming got a gate that always passed — a vacuous green (R3 + the
+// kernel/plugin boundary law: a lane's private layout must not live in the
+// generic engine). `bed_prefix` is the lane's bed-name stem
+// (e.g. `check-omarchy-pr-`); the probe matches `guest=<prefix><N>` for any VM
+// suffix, so a live batch VM of the declared family is caught.
 func probeSequencing(input map[string]any) (bool, string) {
+	prefix := s(input["bed_prefix"])
+	if prefix == "" {
+		return false, "sequencing: bed_prefix required (the lane's bed-name stem, e.g. check-omarchy-pr-)"
+	}
+	// guest=<prefix><N><suffix> — the per-VM domain as it appears in the qemu
+	// argv (the `guest=` parameter the libvirt domain launches with).
+	re, err := regexp.Compile(`guest=` + regexp.QuoteMeta(prefix) + `[0-9]+`)
+	if err != nil {
+		return false, "sequencing: bad bed_prefix: " + err.Error()
+	}
 	out, _ := exec.Command("ps", "aux").Output()
-	if len(guestVmRe.FindAll(out, -1)) > 0 {
-		return false, "sequencing: live batch VMs present"
+	if len(re.FindAll(out, -1)) > 0 {
+		return false, "sequencing: live batch VMs present for prefix " + prefix
 	}
 	return probeGoldenPresent(input)
 }

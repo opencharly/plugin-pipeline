@@ -25,7 +25,14 @@ import (
 // runAdeBed invokes the org's check-run for the rendered bed and maps its exit
 // contract to the deterministic verdict (0 PASS, 2 FAIL, 3 SKIP, else
 // NO_VALIDATION).
-func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, int, error) {
+//
+// headSHA is the LANE's head, passed explicitly. It must NOT be read from the
+// process env: the batch lanes run concurrently and the per-lane value lives in
+// the run context (executor.go's "$env.PR_HEAD_SHA to this lane's head"), so an
+// os.Getenv here returns the operator's value or EMPTY — never this lane's.
+// Live-caught: the run logged `--var PR_HEAD_SHA=` while the lane's context
+// carried a real sha.
+func runAdeBed(ctx context.Context, pr, headSHA, bed, workdir string) (string, string, int, error) {
 	charlyBin := os.Getenv("CHARLY_BIN")
 	if charlyBin == "" {
 		charlyBin = "charly"
@@ -36,7 +43,7 @@ func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, in
 	args := []string{
 		"check", "run", bed,
 		"--var", "PR_NUMBER=" + pr,
-		"--var", "PR_HEAD_SHA=" + os.Getenv("PR_HEAD_SHA"),
+		"--var", "PR_HEAD_SHA=" + headSHA,
 		"--keep-venue",
 	}
 	if workdir != "" {
@@ -45,10 +52,7 @@ func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, in
 	cmd := exec.CommandContext(ctx, charlyBin, args...)
 	cmd.Env = os.Environ()
 	out, rerr := cmd.CombinedOutput()
-	summary := strings.TrimSpace(string(out))
-	if len(summary) > 400 {
-		summary = summary[len(summary)-400:]
-	}
+	summary := lastLines(string(out), 12, 400)
 	code := 0
 	if rerr != nil {
 		if ee, ok := rerr.(*exec.ExitError); ok {
@@ -60,8 +64,10 @@ func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, in
 	// the runner NEVER leaves a VM running: --keep-venue kept the domain for
 	// the evidence collection — destroy it now (best-effort; a lingering
 	// domain holds the golden's snapshot and blocks the next lane's
-	// sequencing gate).
-	destroy := exec.CommandContext(ctx, charlyBin, "vm", "destroy", bed)
+	// sequencing gate). --if-exists makes an already-absent venue a SUCCESS:
+	// without it every clean lane logged a spurious
+	// `no such VM … nothing destroyed` error.
+	destroy := exec.CommandContext(ctx, charlyBin, "vm", "destroy", bed, "--if-exists")
 	destroy.Env = os.Environ()
 	if dout, derr := destroy.CombinedOutput(); derr != nil {
 		summary += "\n[ade] venue destroy: " + strings.TrimSpace(string(dout))
@@ -70,9 +76,26 @@ func runAdeBed(ctx context.Context, pr, bed, workdir string) (string, string, in
 	return verdict, summary, code, nil
 }
 
+// lastLines keeps the TAIL of a multi-line diagnostic, capped at maxBytes. The
+// predecessor kept the last 400 BYTES of the message, which sliced a mid-word
+// fragment (the live log showed `check-run exit 1: eline/candy/plugin-pipeline`)
+// and DROPPED the actual diagnosis — the trailing lines are the error, the
+// leading ones are the banner. Whole lines, so the message stays readable.
+func lastLines(s string, maxLines, maxBytes int) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	out := strings.TrimSpace(strings.Join(lines, "\n"))
+	if len(out) > maxBytes {
+		out = "…" + out[len(out)-maxBytes:]
+	}
+	return out
+}
+
 // adeVerdict resolves the rendered bed for the lane's PR and runs the org
 // check-run; returns the deterministic verdict + the run summary.
-func adeVerdict(ctx context.Context, pr, bed, workdir string) (string, string, error) {
+func adeVerdict(ctx context.Context, pr, headSHA, bed, workdir string) (string, string, error) {
 	if bed == "" {
 		bed = "check-omarchy-pr-" + pr + "-vm"
 	}
@@ -81,7 +104,7 @@ func adeVerdict(ctx context.Context, pr, bed, workdir string) (string, string, e
 	if findBedEntity(workdir, bed) == "" {
 		return "NO_VALIDATION", "ade: bed entity missing: " + bed, fmt.Errorf("ade: bed entity %q not found under %s", bed, workdir)
 	}
-	verdict, summary, code, err := runAdeBed(ctx, pr, bed, workdir)
+	verdict, summary, code, err := runAdeBed(ctx, pr, headSHA, bed, workdir)
 	if err != nil {
 		return verdict, summary, err
 	}

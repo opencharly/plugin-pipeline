@@ -52,17 +52,6 @@ var toolCatalog = map[string][]toolFn{
 		fn("get_pr_thread", "CURRENT live issue body (authoritative) plus all prior comments."),
 		fn("get_pr_meta", "PR metadata: title, state, draft, mergeable, head/base refs, file count."),
 	},
-	"pipeline": {
-		fn("media_gate", "Assert the media artifacts exist with the min sizes."),
-		fn("lock_audit", "Assert zero write-lock incidents in the run trees."),
-		fn("evidence_audit", "Audit media and locks for the evidence packet."),
-		fn("config_audit", "CONFIG AUDIT: the oracle bed against the lane rules."),
-		fn("resolve_channel", "Resolve the PR channel from the channels registry."),
-		fn("head_freshness", "Assert the plan head SHA equals the live PR head."),
-		fn("sequencing", "The deterministic sequencing gate."),
-		fn("golden_present", "Assert the golden disk exists and is unheld."),
-		fn("lanes_ok", "Report the concurrency budget."),
-	},
 	"ledger": {
 		fnArgs("stage_output", "Read a prior stage output from THIS RUN's ledger.", map[string]any{"stage": map[string]any{"type": "string", "description": "the stage id (e.g. triage, eval)"}}, []string{"stage"}),
 		fnArgs("run_outcomes", "The structured step outcomes of a bed's LATEST check run: every step's id, name, ok/fail/skip, and the run verdict. The tool resolves the latest run dir itself — never guess paths.", map[string]any{"bed": map[string]any{"type": "string", "description": "the bed entity name (e.g. check-omarchy-pr-10115-vm)"}}, []string{"bed"}),
@@ -70,8 +59,21 @@ var toolCatalog = map[string][]toolFn{
 	},
 }
 
+// REMOVED: the `pipeline` agent-tool group. It declared NINE tools with EMPTY
+// parameter schemas (fn, not fnArgs) and dispatched them with an EMPTY input
+// map (`runProbe(name, map[string]any{})`), so every one of them either passed
+// VACUOUSLY (lock_audit over no trees) or failed spuriously (config_audit
+// needs a bed, golden_present needs a golden) — the exact "every call arrived
+// arg-less" class this file's own header RCA'd for the ledger tools. It was
+// also UNUSED (no skill advertises those tool names; no stage declares
+// `tools: [pipeline]`) and DUPLICATED the deterministic probe surface, which
+// already exists canonically and schema-validated as the `probe:` STAGE
+// (the lane drives `verbs: [ledger_gate]`). Per R3 (one canonical
+// implementation per behavior) and R5 (delete legacy completely), the broken
+// duplicate is deleted rather than taught to shadow the probe stages.
+
 // buildTools renders the declared tool references into the SDK's function-tool
-// params. The catalog is unchanged; only the wire rendering is the SDK's.
+// params. The catalog is the wire source; the SDK owns the rendering.
 func buildTools(refs []string) []openai.ChatCompletionToolUnionParam {
 	var fns []toolFn
 	for _, ref := range refs {
@@ -99,8 +101,6 @@ func buildTools(refs []string) []openai.ChatCompletionToolUnionParam {
 	return out
 }
 
-func toolFail(msg string) string { return jsonStr(map[string]string{"status": "fail", "message": msg}) }
-
 // ghClient is a PROCESS-WIDE lazily-built client (http.Client is concurrency-
 // safe; the client carries no per-lane state — the race lesson of RCA
 // 2026.252.2210 is about per-LANE state, which stays in the runCtx).
@@ -114,18 +114,12 @@ func ghc() *gh.Client {
 	return ghClient
 }
 
-// dispatchTool executes one tool call.
+// dispatchTool executes one tool call. The argument string is the model's JSON
+// argument object for the tool's declared schema.
 func dispatchTool(name, arguments string, rc *runCtx) string {
 	switch name {
 	case "get_pr_diff", "get_pr_commits", "get_pr_thread", "get_pr_meta":
 		return prTool(name, rc)
-	case "media_gate", "lock_audit", "evidence_audit", "config_audit", "resolve_channel",
-		"head_freshness", "sequencing", "golden_present", "lanes_ok":
-		ok, msg := runProbe(name, map[string]any{})
-		if !ok {
-			return toolFail(msg)
-		}
-		return jsonStr(map[string]string{"status": "pass"})
 	case "stage_output":
 		return stageOutputTool(arguments, rc)
 	case "run_outcomes":
