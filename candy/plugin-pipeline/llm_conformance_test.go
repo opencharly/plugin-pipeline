@@ -218,14 +218,14 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 		Seed:                  &seed,
 		Stop:                  []any{"A", "B"},
 		Reasoning_effort:      "high",
-		Stream_options:        params.StreamOptions{Include_usage: openaiBoolPtr(true)},
+		Stream_options:        params.LLMStreamOptions{Include_usage: openaiBoolPtr(true)},
 		Parallel_tool_calls:   &parallel,
 		Logprobs:              &logprobs,
 		Top_logprobs:          &topLog,
 		User:                  "u-1",
 		Metadata:              map[string]string{"k": "v"},
 		Logit_bias:            map[string]int64{"5": 1},
-		Response_format:       params.ResponseFormat{Type: "json_object"},
+		Response_format:       params.LLMResponseFormat{Type: "json_object"},
 		Tool_choice:           "required",
 		Extra:                 map[string]any{"custom_knob": 7},
 	}}}
@@ -278,15 +278,14 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 // rendered as the OpenAI json_schema object (not just json_object).
 func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
 	rc := &runCtx{llm: params.LLMSpec{Params: params.LLMParams{
-		Response_format: params.ResponseFormat{
-			Type: "json_schema",
-			Json_schema: struct {
-				Name        string         `json:"name"`
-				Description string         `json:"description,omitempty"`
-				Schema      map[string]any `json:"schema"`
-				Strict      bool           `json:"strict,omitempty"`
-			}{Name: "verdict", Description: "d", Schema: map[string]any{"type": "object"}, Strict: true},
-		},
+		Response_format: func() params.LLMResponseFormat {
+			rf := params.LLMResponseFormat{Type: "json_schema"}
+			rf.Json_schema.Name = "verdict"
+			rf.Json_schema.Description = "d"
+			rf.Json_schema.Schema = map[string]any{"type": "object"}
+			rf.Json_schema.Strict = true
+			return rf
+		}(),
 	}}}
 	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "{}") },
 		func(t *testing.T, body map[string]any) {
