@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk"
 )
 
@@ -152,44 +150,25 @@ func restAfter(args []string, name string) []string {
 	return nil
 }
 
-// teardownLaneBeds: the between-lane venue hygiene — destroy the VM beds the
-// lane's own `ade` stages declared, by ENTITY NAME, best-effort.
+// REMOVED: teardownVenue / teardownLaneBeds (the batch-level venue teardown).
 //
-// This is deliberately ENTITY-DRIVEN (R3 + the kernel/plugin boundary law). The
-// predecessor `teardownVenue` hardcoded the eval-omarchy golden
-// (`check-omarchy-eval-base-inst`) and a domain suffix scheme
-// (`check-omarchy-pr-<pr>-vm`, plus a `-vm-probe` suffix that no entity has) —
-// a lane's private layout baked into the generic engine, which also meant every
-// unrelated pipeline got an eval-omarchy-shaped teardown. The bed names are
-// already declared in the stages, so they are read from there and ref-resolved.
+// Venue lifecycle has ONE owner: the `ade` stage itself. `charly check run` is
+// invoked with `--keep-venue` (the evidence is collected from the live domain),
+// and runAdeBed's deferred destroyVenue tears it down on every exit path,
+// including an abort (`context.WithoutCancel`). A SECOND owner was a defect of
+// exactly the kind R3 forbids:
 //
-// `--if-exists` makes an already-absent venue a SUCCESS: without it, every clean
-// lane logged a spurious `no such VM … nothing destroyed`.
-func teardownLaneBeds(ctx context.Context, p params.PipelineInput, pr, calver, workdir string) {
-	charlyBin := os.Getenv("CHARLY_BIN")
-	if charlyBin == "" {
-		charlyBin = "charly"
-	}
-	rc := &runCtx{pr: pr, calver: calver, workdir: workdir, env: envMap()}
-	seen := map[string]bool{}
-	for _, raw := range p.Stages {
-		if asString(raw["kind"]) != "ade" {
-			continue
-		}
-		bed := strings.TrimSpace(rc.resolveRefs(asString(raw["bed"])))
-		if bed == "" || seen[bed] {
-			continue
-		}
-		seen[bed] = true
-		args := []string{"vm", "destroy", bed, "--if-exists"}
-		if workdir != "" {
-			args = append([]string{"-C", workdir}, args...)
-		}
-		cmd := exec.CommandContext(ctx, charlyBin, args...)
-		cmd.Env = os.Environ()
-		_, _ = cmd.CombinedOutput()
-	}
-}
+//   - it hardcoded the eval-omarchy golden entity and a
+//     `check-omarchy-pr-<pr>-vm`/`-vm-probe` domain scheme in the domain-neutral
+//     engine (the `-vm-probe` suffix matched no entity at all);
+//   - it resolved the bed refs against the PROCESS env (`envMap()`), not the
+//     lane's run context — the same per-lane-env break this change fixes in
+//     ade.go, so any `$env.*` bed ref resolved to the operator's value or
+//     empty and the destroy silently targeted the wrong name;
+//   - it used the signal-cancelled ctx, so it was skipped precisely in the
+//     abort scenario teardown exists for.
+//
+// The `ade` stage owns the venue; the batch does not duplicate the rule.
 
 func flagAfter(args []string, name string) string {
 	for i, a := range args {

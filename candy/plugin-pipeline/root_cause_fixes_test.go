@@ -1,13 +1,13 @@
 package pluginpipeline
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,42 +74,56 @@ func TestAdeVerdictUsesTheLaneHeadNotTheProcessEnv(t *testing.T) {
 	}
 }
 
-// TestTeardownLaneBedsIsEntityDriven: the between-lane teardown must derive the
-// bed names from the lane's OWN `ade` stages, ref-resolved — never a hardcoded
-// eval-omarchy golden/domain scheme.
-func TestTeardownLaneBedsIsEntityDriven(t *testing.T) {
-	// Only the DESTRUCTION TARGET derivation is asserted here (no charly spawn):
-	// the same resolveRefs walk teardownLaneBeds performs.
-	p := params.PipelineInput{
-		Stages: []params.Stage{
-			{"kind": "ade", "id": "eval", "bed": "check-omarchy-pr-$pr-vm"},
-			{"kind": "ade", "id": "control", "bed": "check-omarchy-pr-$pr-control"},
-			{"kind": "gate", "id": "publish", "condition": "true"},
-		},
+// TestAdeBedIsRequiredNotDefaulted: an empty bed must FAIL LOUD, never fall back
+// to a hardcoded lane name.
+//
+// Validator block on PR #26 (R3/R5): three sites substituted a hardcoded
+// `check-omarchy-pr-<pr>-vm` — a lane's private naming scheme in the
+// domain-neutral engine. #AdeStage.bed is schema-REQUIRED, so an empty bed is a
+// caller defect; defaulting it silently mis-targeted any other project and made
+// the bed-naming rule live in two places with different rules.
+func TestAdeBedIsRequiredNotDefaulted(t *testing.T) {
+	if _, _, _, err := runAdeBedKit(context.Background(), "7", "", t.TempDir(), nil); err == nil {
+		t.Fatal("an empty bed must be a hard error, not defaulted")
 	}
-	rc := &runCtx{pr: "12115", env: map[string]string{}}
-	var got []string
-	seen := map[string]bool{}
-	for _, raw := range p.Stages {
-		if asString(raw["kind"]) != "ade" {
-			continue
-		}
-		bed := strings.TrimSpace(rc.resolveRefs(asString(raw["bed"])))
-		if bed == "" || seen[bed] {
-			continue
-		}
-		seen[bed] = true
-		got = append(got, bed)
+	if _, _, err := adeVerdict(context.Background(), "7", "sha", "", t.TempDir()); err == nil {
+		t.Fatal("adeVerdict with an empty bed must be a hard error, not defaulted")
 	}
-	want := []string{"check-omarchy-pr-12115-vm", "check-omarchy-pr-12115-control"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("teardown targets = %v, want the lane's declared beds %v", got, want)
-	}
-	// and it must NOT contain the hardcoded golden the predecessor destroyed
-	for _, bed := range got {
-		if bed == "check-omarchy-eval-base-inst" {
-			t.Fatalf("teardown must not hardcode the eval-omarchy golden: %v", got)
+	// the literal fallback scheme must be gone from the engine entirely
+	for _, f := range []string{"ade.go", "adekit.go", "cli.go"} {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
 		}
+		if strings.Contains(string(b), `"check-omarchy-pr-" + pr + "-vm"`) {
+			t.Fatalf("%s still substitutes the hardcoded omarchy bed name", f)
+		}
+	}
+}
+
+// TestVenueHasOneOwner: the venue lifecycle must have exactly ONE owner.
+//
+// Validator block on PR #26 (R1/R3/R5): a batch-level `teardownLaneBeds` was a
+// SECOND owner that (a) resolved bed refs against the PROCESS env rather than
+// the lane's run context, and (b) used the signal-cancelled ctx, so it was
+// skipped exactly in the abort scenario teardown exists for. The `ade` stage's
+// deferred destroyVenue is the one owner; no batch-level teardown may return.
+func TestVenueHasOneOwner(t *testing.T) {
+	// the removed duplicate owner must not exist as a symbol
+	src, err := os.ReadFile("cli.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "func teardownLaneBeds") || strings.Contains(string(src), "func teardownVenue") {
+		t.Fatal("a batch-level venue teardown must not exist — the ade stage owns the venue lifecycle")
+	}
+	// the destroy must be detached from cancellation so an abort still tears down
+	adeSrc, err := os.ReadFile("ade.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(adeSrc), "context.WithoutCancel") {
+		t.Fatal("the venue destroy must run on a context detached from cancellation (an abort must not strand the VM)")
 	}
 }
 

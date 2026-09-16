@@ -51,7 +51,10 @@ func (v *kitVerbs) RunProvisionAct(ctx context.Context, op *spec.Op, verb string
 // a vacuous PASS (RCA: the flat-shape fixture never matched a real bed).
 func bedPlanOps(workdir, pr, bed string) ([]spec.Op, error) {
 	if bed == "" {
-		bed = "check-omarchy-pr-" + pr + "-vm"
+		// #AdeStage.bed is schema-required; an empty bed is a caller defect, not
+		// a defaultable input. The predecessor substituted a hardcoded
+		// `check-omarchy-pr-<pr>-vm` — the lane-coupling this change removes.
+		return nil, fmt.Errorf("ade: bed required (the stage's bed: must resolve)")
 	}
 	bedFile := findBedEntity(workdir, bed)
 	if bedFile == "" {

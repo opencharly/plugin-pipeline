@@ -72,8 +72,6 @@ func runBatch(rest []string, p params.PipelineInput, calver, workdir string, ex 
 				fmt.Printf("== lane %s ==\n", one)
 				lerr := runPlan(ctx, p, one, calver, workdir, ex)
 				rep.record(one, lerr)
-				// per-lane venue hygiene (its own VM beds, by declared entity name)
-				teardownLaneBeds(ctx, p, one, calver, workdir)
 			}
 		}()
 	}
