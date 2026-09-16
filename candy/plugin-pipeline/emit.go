@@ -205,9 +205,11 @@ func (rc *runCtx) reportRef(ref string) (string, bool) {
 }
 
 // renderStringLeaf renders ONE string leaf with the ${name[:transform]} grammar
-// against vars, returning a plain string. It reuses the SAME transforms as
-// `generate` (indent/bullets/yaml/json/scalar) but never emits a YAML fragment
-// itself — the leaf is a value the CUE encoder serializes.
+// against vars, returning a plain string. It never emits a YAML fragment itself —
+// the leaf is a value the CUE encoder serializes. The accepted transforms are
+// emitValidTransforms (json/yaml/indent/bullets); a BARE `${name}` (no transform)
+// is the scalar default. `negate` from the generate grammar is deliberately absent
+// (a string leaf has no check to negate) and hard-errors.
 //
 // HARD ERRORS, matching the generate grammar's contract (R1/R4): an UNKNOWN
 // transform and an UNRESOLVED ${name} are stage failures, never a silent
