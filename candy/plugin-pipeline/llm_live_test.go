@@ -102,14 +102,20 @@ func TestLive_OllamaReasoningIsCaptured(t *testing.T) {
 	t.Setenv("EVAL_LLM_BASE_URL", liveBaseURL)
 	t.Setenv("EVAL_LLM_MODEL", liveModel())
 
-	// A prompt that reliably elicits prose (and usually reasoning).
+	// A prompt that elicits step-by-step thinking: the model emits the
+	// non-standard `reasoning` field. The test FAILS when it observes none, so it
+	// cannot pass vacuously (the rewired engine must still read the field from the
+	// shared client — the preservation claim this branch's PR rests on).
 	msg, err := chat(t.Context(), nil, nil,
-		[]chatMsg{{Role: "user", Content: strptr("In one short sentence, what is 2+2?")}}, nil)
+		[]chatMsg{{Role: "user", Content: strptr("Think step by step, then answer: what is 17 times 23?")}}, nil)
 	if err != nil {
 		t.Fatalf("live chat: %v", err)
 	}
 	if msg.Content == nil {
 		t.Fatal("nil content")
 	}
-	t.Logf("LIVE REPLY: %q", *msg.Content)
+	if msg.Reasoning == "" {
+		t.Fatalf("the live model returned NO reasoning-bearing output, so the non-standard `reasoning` read is UNOBSERVED (the rewired engine's preservation claim is unproven)")
+	}
+	t.Logf("LIVE REASONING observed: %d bytes; content=%q", len(msg.Reasoning), *msg.Content)
 }
