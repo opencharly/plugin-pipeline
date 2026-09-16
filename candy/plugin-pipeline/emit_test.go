@@ -1,6 +1,7 @@
 package pluginpipeline
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,85 @@ func TestDumpLedger_SchemaFirst(t *testing.T) {
 	}
 	if got != "verdict: PASS — multi\nline: message" {
 		t.Fatalf("multiline colon message did not round-trip: %q", got)
+	}
+}
+
+// TestEmitStage_FileDefSelector pins the `path.cue#Def` def-selection form: a
+// file with TWO defs emits the SELECTED one (the bare-path form uses the first).
+func TestEmitStage_FileDefSelector(t *testing.T) {
+	wd := t.TempDir()
+	src := "#First: {a!: string}\n#Second: {b!: int}\n"
+	if err := os.WriteFile(filepath.Join(wd, "two.cue"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "two.cue#Second",
+		"value":  map[string]any{"b": 2},
+		"out":    wd + "/two.yml",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+		t.Fatalf("emit with a #Def selector: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(wd, "two.yml"))
+	var doc map[string]any
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("emitted YAML invalid: %v\n%s", err, b)
+	}
+	if doc["b"] != 2 {
+		t.Fatalf("selected def not emitted: %v", doc)
+	}
+}
+
+// TestEmitStage_JSONFormat pins the format:"json" branch: the value is still
+// schema-validated first, then written as JSON.
+func TestEmitStage_JSONFormat(t *testing.T) {
+	wd := t.TempDir()
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "#T: {name!: string}",
+		"value":  map[string]any{"name": "a: b"},
+		"format": "json",
+		"out":    wd + "/t.json",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+		t.Fatalf("emit json: %v", err)
+	}
+	b, _ := os.ReadFile(filepath.Join(wd, "t.json"))
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil {
+		t.Fatalf("emitted JSON invalid: %v\n%s", err, b)
+	}
+	if doc["name"] != "a: b" {
+		t.Fatalf("json round-trip mismatch: %v", doc)
+	}
+}
+
+// TestEmitStage_JSONFormatRejectsSchemaViolation pins that the json branch still
+// validates against the schema first (a violation fails, no file written).
+func TestEmitStage_JSONFormatRejectsSchemaViolation(t *testing.T) {
+	wd := t.TempDir()
+	stage := map[string]any{
+		"id":     "emit",
+		"kind":   "emit",
+		"schema": "#T: {name!: string, n!: int}",
+		"value":  map[string]any{"name": "x"},
+		"format": "json",
+		"out":    wd + "/t.json",
+	}
+	l := newLedger()
+	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
+	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+		t.Fatal("emit json with a missing required field: want an error, got nil")
+	}
+	if _, err := os.Stat(filepath.Join(wd, "t.json")); err == nil {
+		t.Fatal("emit wrote a JSON artifact despite a schema violation")
 	}
 }
 

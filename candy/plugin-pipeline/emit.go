@@ -131,7 +131,7 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 		return err
 	}
 
-	// 4. The authored post-write validator (optional), same contract as generate.
+	// 3. The authored post-write validator (optional), same contract as generate.
 	if v := s(raw["validate"]); v != "" {
 		return runAuthoredValidator(rc, v)
 	}
