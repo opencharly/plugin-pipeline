@@ -90,7 +90,7 @@ func validatePipeline(p params.PipelineInput) error {
 			return errors.New("pipeline: stage missing id or kind")
 		}
 		switch s["kind"] {
-		case "agent", "probe", "ade", "generate", "media", "gate", "command":
+		case "agent", "probe", "ade", "generate", "emit", "media", "gate", "command":
 		default:
 			return fmt.Errorf("pipeline: unknown stage kind %q", s["kind"])
 		}

@@ -14,6 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"cuelang.org/go/cue"
+	"cuelang.org/go/cue/errors"
+	cueyaml "cuelang.org/go/encoding/yaml"
+
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk"
 )
@@ -596,6 +600,13 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 			return res, err
 		}
 		return res, nil
+	case "emit":
+		if err := rc.runEmit(raw); err != nil {
+			res.Status = "fail"
+			res.Message = err.Error()
+			return res, err
+		}
+		return res, nil
 	case "media":
 		if err := rc.runMedia(raw, l); err != nil {
 			res.Status = "fail"
@@ -666,20 +677,57 @@ func runGates(rc *runCtx, gates []string) error {
 	return nil
 }
 
+// dumpLedger writes the per-run ledger dump (stage-findings.yml) SCHEMA-FIRST:
+// the rows are structured values validated against #StageFinding and marshalled
+// through the CUE yaml encoder, so the dump is always valid YAML. The former
+// hand-rolled fmt.Fprintf writer was the same class as the free-form record
+// template — a debug artifact nobody can parse is worthless.
 func dumpLedger(l *ledger, path string) error {
 	sort.Strings(l.order)
-	var sb strings.Builder
+	rows := make([]any, 0, len(l.order))
 	for _, id := range l.order {
 		r := l.results[id]
-		sb.WriteString(fmt.Sprintf("- stage: %s\n  kind: %s\n  status: %s\n  trigger: %s\n  message: %q\n",
-			r.ID, r.Kind, r.Status, r.Trigger, r.Message))
-		if len(r.Outputs) > 0 {
-			b, _ := json.Marshal(r.Outputs)
-			sb.WriteString("  outputs: " + string(b) + "\n")
+		row := map[string]any{"stage": r.ID, "kind": r.Kind, "status": r.Status}
+		if r.Trigger != "" {
+			row["trigger"] = r.Trigger
 		}
+		if r.Message != "" {
+			row["message"] = r.Message
+		}
+		if len(r.Outputs) > 0 {
+			row["outputs"] = r.Outputs
+		}
+		rows = append(rows, row)
+	}
+	body, err := marshalSchemaFirst("#StageFindings", rows)
+	if err != nil {
+		return err
 	}
 	_ = os.MkdirAll(filepath.Dir(path), 0o755)
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return os.WriteFile(path, body, 0o644)
+}
+
+// marshalSchemaFirst validates a value against a def in the plugin schema and
+// marshals it to YAML — the ONE schema-first writer the `emit` stage and the
+// internal dumps share (R3). `rows` may be a list (validated element-wise) or a
+// single mapping.
+func marshalSchemaFirst(def string, value any) ([]byte, error) {
+	root, err := emitPluginSchema()
+	if err != nil {
+		return nil, err
+	}
+	d := root.LookupPath(cue.ParsePath(def))
+	if !d.Exists() {
+		return nil, fmt.Errorf("schema def %s not found", def)
+	}
+	v := emitCtx.Encode(value)
+	if v.Err() != nil {
+		return nil, v.Err()
+	}
+	if err := v.Unify(d).Validate(cue.Concrete(true)); err != nil {
+		return nil, fmt.Errorf("%s: %s", def, errors.Details(err, nil))
+	}
+	return cueyaml.Encode(v.Unify(d))
 }
 
 // runCheckRun invokes the EXISTING check executor (charly check run <bed>) —

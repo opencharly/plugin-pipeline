@@ -122,13 +122,22 @@ func (rc *runCtx) runGenerate(raw map[string]any) error {
 		// $env.NAME). Non-zero exit = the stage FAILS - the rendered artifact
 		// never ships unvalidated (RCA 2026.252: the eval lane shipped
 		// placeholder beds because this contract was declared but dead).
-		cmd := rc.resolveRefs(v)
-		c := exec.Command("bash", "-c", cmd)
-		c.Dir = rc.workdir
-		c.Stdout, c.Stderr = os.Stdout, os.Stderr
-		if err := c.Run(); err != nil {
-			return errString("generate validate failed: " + err.Error())
-		}
+		return runAuthoredValidator(rc, v)
+	}
+	return nil
+}
+
+// runAuthoredValidator runs an authored `validate:` shell command in the run
+// workdir (the SAME contract for both the `generate` and `emit` stage kinds —
+// one implementation, R3). Non-zero exit fails the stage: the artifact never
+// ships unvalidated.
+func runAuthoredValidator(rc *runCtx, v string) error {
+	cmd := rc.resolveRefs(v)
+	c := exec.Command("bash", "-c", cmd)
+	c.Dir = rc.workdir
+	c.Stdout, c.Stderr = os.Stdout, os.Stderr
+	if err := c.Run(); err != nil {
+		return errString("validate failed: " + err.Error())
 	}
 	return nil
 }
