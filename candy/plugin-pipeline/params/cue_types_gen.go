@@ -227,13 +227,18 @@ type GenerateStage struct {
 //	format: "yaml" (default) | "json".
 //
 //	vars:   OPTIONAL named values for string-leaf TEMPLATES. A string leaf that
-//	        contains `${name}` markers is rendered with the SAME per-marker
-//	        grammar as `generate` (`${name:indent}` keeps a multi-line prose
-//	        block; `${name:bullets}` renders a markdown list; a bare `${name}`
-//	        scalar-resolves) — but the RESULT is a string leaf of the structured
-//	        value, so the CUE encoder owns the YAML quoting/block-scalar. This is
-//	        what lets a prose field (the user-voice report) be composed WITHOUT a
-//	        hand-written YAML template.
+//	        contains `${name}` markers is rendered with the SHARED MARKER SYNTAX
+//	        but emit's OWN transform set — NOT generate's full set:
+//	          ${name}           scalar default (the value itself)
+//	          ${name:indent}    the value as-is (a multi-line prose block)
+//	          ${name:bullets}   a markdown bullet list (one line per element)
+//	          ${name:yaml}      the value rendered inline as JSON
+//	          ${name:json}      same as :yaml for a string leaf
+//	        `negate` is DELIBERATELY REJECTED (a string leaf has no check to
+//	        negate) and hard-errors like any other unknown transform. The RESULT
+//	        is a string leaf of the structured value, so the CUE encoder owns the
+//	        YAML quoting/block-scalar — which is what lets a prose field (the
+//	        user-voice report) be composed WITHOUT a hand-written YAML template.
 type EmitStage struct {
 	Kind string `json:"kind"`
 
