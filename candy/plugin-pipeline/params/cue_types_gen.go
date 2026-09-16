@@ -200,6 +200,65 @@ type GenerateStage struct {
 	Skip_when string `json:"skip_when,omitempty"`
 }
 
+// #EmitStage: the SCHEMA-FIRST artifact writer — the replacement for hand-written
+// YAML/JSON. Instead of rendering a free-form string template (which can emit
+// invalid YAML, as a `what: text: with-colon` scalar did before this existed),
+// `value` is assembled as a STRUCTURED value (the SAME ref grammar as `vars`),
+// validated against the authored CUE `schema` def BEFORE any bytes hit disk, and
+// only then marshalled to `out` (YAML by default). The record an agent or a lane
+// produces therefore CANNOT be malformed: a value that violates the schema fails
+// the stage informatively, exactly like an ingress kind body.
+//
+//	schema: one of THREE forms, each unified against `value` with Concreteness
+//	        required (an unknown or wrong-typed field is a stage failure, never a
+//	        silent drop):
+//	          1. a bare def NAME (`#StageFindings`) resolving in the plugin's own
+//	             served schema (schema/pipeline.cue);
+//	          2. a `.cue` FILE path (`candy/eval-pr/record.cue`, project-relative
+//	             to the run workdir) — the strongest form, a committed and
+//	             reviewable schema the project owns; a `#Def` suffix
+//	             (`record.cue#NotTestableRecord`) selects a def explicitly, a
+//	             bare path uses the file's first `#Def`;
+//	          3. a literal CUE source string (a self-contained def block).
+//	value:  a structured map assembled from refs (@stage.output, $pr, $env.NAME).
+//	        Every leaf resolves through the ref grammar; nested maps/lists are
+//	        resolved recursively (resolveValue), so `@oracle.checks` lands as a
+//	        real list of objects, not a stringified one.
+//	format: "yaml" (default) | "json".
+//
+//	vars:   OPTIONAL named values for string-leaf TEMPLATES. A string leaf that
+//	        contains `${name}` markers is rendered with the SHARED MARKER SYNTAX
+//	        but emit's OWN transform set — NOT generate's full set:
+//	          ${name}           scalar default (the value itself)
+//	          ${name:indent}    the value as-is (a multi-line prose block)
+//	          ${name:bullets}   a markdown bullet list (one line per element)
+//	          ${name:yaml}      the value rendered inline as JSON
+//	          ${name:json}      same as :yaml for a string leaf
+//	        `negate` is DELIBERATELY REJECTED (a string leaf has no check to
+//	        negate) and hard-errors like any other unknown transform. The RESULT
+//	        is a string leaf of the structured value, so the CUE encoder owns the
+//	        YAML quoting/block-scalar — which is what lets a prose field (the
+//	        user-voice report) be composed WITHOUT a hand-written YAML template.
+type EmitStage struct {
+	Kind string `json:"kind"`
+
+	Id string `json:"id"`
+
+	Schema string `json:"schema"`
+
+	Value map[string]any/* CUE top */ `json:"value"`
+
+	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
+
+	Out string `json:"out"`
+
+	Format string `json:"format,omitempty"`
+
+	Validate string `json:"validate,omitempty"`
+
+	Skip_when string `json:"skip_when,omitempty"`
+}
+
 type MediaStage struct {
 	Kind string `json:"kind"`
 
@@ -231,6 +290,25 @@ type CommandStage struct {
 
 	Expect_exit int64 `json:"expect_exit,omitempty"`
 }
+
+// #StageFinding — one row of the per-run ledger dump (stage-findings.yml). The
+// dump is emitted schema-first (marshalled + validated), so it is always valid
+// YAML — a debug artifact no reader can parse is worthless.
+type StageFinding struct {
+	Stage string `json:"stage"`
+
+	Kind string `json:"kind"`
+
+	Status string `json:"status"`
+
+	Trigger string `json:"trigger,omitempty"`
+
+	Message string `json:"message,omitempty"`
+
+	Outputs map[string]any/* CUE top */ `json:"outputs,omitempty"`
+}
+
+type StageFindings []StageFinding
 
 // Probe verb inputs (deterministic, engine-native).
 type MediaGateInput struct {

@@ -8,7 +8,7 @@ generated params). Any pipeline is a declared plan; an eval is one plan, any
 other agent workflow is another.
 
 - **`charly pipeline run <entity>`** — execute a `kind: pipeline` entity from
-  charly.yml: stages (`agent`/`check`/`probe`/`generate`/`media`/`gate`/`command`),
+  charly.yml: stages (`agent`/`probe`/`ade`/`generate`/`emit`/`media`/`gate`/`command`),
   a per-run ledger, bounded redo with the loop guard, FAIL-HARD, and the
   reference grammar (`$pr` / `$calver` / `$workdir` / `$env.NAME` / `@stage.output`).
 - **`charly pipeline agent`** — the P1 runtime: direct chat-completions with a

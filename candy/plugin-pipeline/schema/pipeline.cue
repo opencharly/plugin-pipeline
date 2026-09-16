@@ -25,7 +25,7 @@
 	skills?: { corpus: string }
 	stages: [#Stage, ...#Stage]
 }
-#Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #MediaStage | #GateStage | #CommandStage
+#Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #EmitStage | #MediaStage | #GateStage | #CommandStage
 // #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
 // cutover). Each declared output is a field name -> #OutputType; the runner
 // renders the contract into the prompt mechanically and validates the reply
@@ -65,6 +65,46 @@
 // an indented multi-line report and bullet lists) into a single file. An unknown
 // transform is a HARD error — never a silent no-op.
 #GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
+// #EmitStage: the SCHEMA-FIRST artifact writer — the replacement for hand-written
+// YAML/JSON. Instead of rendering a free-form string template (which can emit
+// invalid YAML, as a `what: text: with-colon` scalar did before this existed),
+// `value` is assembled as a STRUCTURED value (the SAME ref grammar as `vars`),
+// validated against the authored CUE `schema` def BEFORE any bytes hit disk, and
+// only then marshalled to `out` (YAML by default). The record an agent or a lane
+// produces therefore CANNOT be malformed: a value that violates the schema fails
+// the stage informatively, exactly like an ingress kind body.
+//
+//   schema: one of THREE forms, each unified against `value` with Concreteness
+//           required (an unknown or wrong-typed field is a stage failure, never a
+//           silent drop):
+//             1. a bare def NAME (`#StageFindings`) resolving in the plugin's own
+//                served schema (schema/pipeline.cue);
+//             2. a `.cue` FILE path (`candy/eval-pr/record.cue`, project-relative
+//                to the run workdir) — the strongest form, a committed and
+//                reviewable schema the project owns; a `#Def` suffix
+//                (`record.cue#NotTestableRecord`) selects a def explicitly, a
+//                bare path uses the file's first `#Def`;
+//             3. a literal CUE source string (a self-contained def block).
+//   value:  a structured map assembled from refs (@stage.output, $pr, $env.NAME).
+//           Every leaf resolves through the ref grammar; nested maps/lists are
+//           resolved recursively (resolveValue), so `@oracle.checks` lands as a
+//           real list of objects, not a stringified one.
+//   format: "yaml" (default) | "json".
+//
+//   vars:   OPTIONAL named values for string-leaf TEMPLATES. A string leaf that
+//           contains `${name}` markers is rendered with the SHARED MARKER SYNTAX
+//           but emit's OWN transform set — NOT generate's full set:
+//             ${name}           scalar default (the value itself)
+//             ${name:indent}    the value as-is (a multi-line prose block)
+//             ${name:bullets}   a markdown bullet list (one line per element)
+//             ${name:yaml}      the value rendered inline as JSON
+//             ${name:json}      same as :yaml for a string leaf
+//           `negate` is DELIBERATELY REJECTED (a string leaf has no check to
+//           negate) and hard-errors like any other unknown transform. The RESULT
+//           is a string leaf of the structured value, so the CUE encoder owns the
+//           YAML quoting/block-scalar — which is what lets a prose field (the
+//           user-voice report) be composed WITHOUT a hand-written YAML template.
+#EmitStage: { kind: "emit", id: string, schema: string, value: {[string]: _}, vars?: {[string]: _}, out: string, format?: "yaml" | "json", validate?: string, skip_when?: string }
 #MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
 #GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
 #CommandStage: { kind: "command",  id: string, command: string, expect_exit?: int }   // EXTERNAL processes ONLY
@@ -72,6 +112,19 @@
 
 #MediaSpec: { files: [string, ...string], min: {[string]: int}, dir: string }
 #ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string, control_bed_template?: string }
+
+// #StageFinding — one row of the per-run ledger dump (stage-findings.yml). The
+// dump is emitted schema-first (marshalled + validated), so it is always valid
+// YAML — a debug artifact no reader can parse is worthless.
+#StageFinding: close({
+	stage!:   string
+	kind!:    string
+	status!:  string
+	trigger?: string
+	message?: string
+	outputs?: {...}
+})
+#StageFindings: [...#StageFinding]
 
 // Probe verb inputs (deterministic, engine-native).
 #MediaGateInput:      { dir: string, files: [string], min: {[string]: int} }
