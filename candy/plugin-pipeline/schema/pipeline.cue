@@ -235,18 +235,18 @@
 	stop?: string | [...string]
 	// response_format: the structured-output contract (text | json_object |
 	// json_schema).
-	response_format?: #ResponseFormat
+	response_format?: #LLMResponseFormat
 	// reasoning_effort: thinking control for reasoning models ("none" disables
 	// thinking where the server honours it).
 	reasoning_effort?: "high" | "medium" | "low" | "none" @go(Reasoning_effort,type=string)
 	// reasoning: the object form of the same control (ollama accepts either).
-	reasoning?: #Reasoning
+	reasoning?: #LLMReasoning
 	// stream_options: streaming response options.
-	stream_options?: #StreamOptions
+	stream_options?: #LLMStreamOptions
 	// parallel_tool_calls: permit the model to emit several tool calls per turn.
 	parallel_tool_calls?: bool @go(Parallel_tool_calls,optional=nillable)
 	// tool_choice: "none" | "auto" | "required" | {function: {name}}.
-	tool_choice?: "none" | "auto" | "required" | #NamedToolChoice
+	tool_choice?: "none" | "auto" | "required" | #LLMNamedToolChoice
 	// logprobs / top_logprobs: token log-probability reporting (unsupported by
 	// the local ollama OpenAI layer; authorable for a full OpenAI endpoint).
 	logprobs?:     bool @go(Logprobs,optional=nillable)
@@ -262,9 +262,9 @@
 	extra?: {[string]: _}
 })
 
-// #ResponseFormat — the structured-output contract. type "json_schema" requires
+// #LLMResponseFormat — the structured-output contract. type "json_schema" requires
 // the json_schema block; the schema field is the JSON Schema itself.
-#ResponseFormat: close({
+#LLMResponseFormat: close({
 	type: "text" | "json_object" | "json_schema" @go(Type,type=string)
 	json_schema?: close({
 		name:         string
@@ -274,17 +274,17 @@
 	})
 })
 
-// #Reasoning — the object form of the reasoning/thinking control.
-#Reasoning: close({
+// #LLMReasoning — the object form of the reasoning/thinking control.
+#LLMReasoning: close({
 	effort?: "high" | "medium" | "low" | "none" @go(Effort,type=string)
 })
 
-// #StreamOptions — streaming response options.
-#StreamOptions: close({
+// #LLMStreamOptions — streaming response options.
+#LLMStreamOptions: close({
 	include_usage?: bool @go(Include_usage,optional=nillable)
 })
 
-// #NamedToolChoice — force one named function tool.
-#NamedToolChoice: close({
+// #LLMNamedToolChoice — force one named function tool.
+#LLMNamedToolChoice: close({
 	function: close({name: string})
 })

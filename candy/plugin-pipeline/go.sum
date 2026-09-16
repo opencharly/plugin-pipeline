@@ -64,10 +64,10 @@ github.com/openai/openai-go/v3 v3.61.0 h1:nMLuGFdKBF0sB3qFVNwE8kpBpenVN1ucYRoKcx
 github.com/openai/openai-go/v3 v3.61.0/go.mod h1:ufI1+K+t0ijRB3gk8eztiw1crcDpsBuxRQL4sbLIrts=
 github.com/opencharly/plugin-gh v0.2026252.1501 h1:/MgnBLG5HbDJr7LYbKNdjISn1IDYalcMSBDGpu6ZTow=
 github.com/opencharly/plugin-gh v0.2026252.1501/go.mod h1:9IQqfFmsd/8yv3/gnUhZxT9Zx9BJT5TmGG8uHz/rr5w=
-github.com/opencharly/sdk v0.2026252.819 h1:gF700Z7Qj5TtWnqDEa8dNOQ7AKF/foPjVUpnwBQT/aA=
-github.com/opencharly/sdk v0.2026252.819/go.mod h1:bHkz9iCZVrpRQ1GjmsqnnOZYkk6bidLqzmikJivJbrU=
-github.com/opencharly/spec v0.2026250.2036 h1:szPuKqRRzkGQcoM4NbSS7oJ6iHd3790EODsPzb0RASY=
-github.com/opencharly/spec v0.2026250.2036/go.mod h1:yaB8ABSTiJClK1xq/zCtWizcqfKKOhnuKcgGrHwxmW8=
+github.com/opencharly/sdk v0.2026259.2136 h1:MzTPNT+jn4yfcgX4QghnDifrlsXzzj4l79UCX4ljJec=
+github.com/opencharly/sdk v0.2026259.2136/go.mod h1:LuIUCBc4OZZ0Bmh8PBkqDxigVNQ0DZAZ1shxT76UnwQ=
+github.com/opencharly/spec v0.2026259.2033 h1:lzrZ9baCRByWdIuO4fDUKMmRkGtMnAyUpnWTFxOGs1o=
+github.com/opencharly/spec v0.2026259.2033/go.mod h1:yaB8ABSTiJClK1xq/zCtWizcqfKKOhnuKcgGrHwxmW8=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=

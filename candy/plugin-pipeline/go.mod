@@ -6,8 +6,8 @@ require (
 	cuelang.org/go v0.16.1
 	github.com/openai/openai-go/v3 v3.61.0
 	github.com/opencharly/plugin-gh v0.2026252.1501
-	github.com/opencharly/sdk v0.2026252.819
-	github.com/opencharly/spec v0.2026250.2036
+	github.com/opencharly/sdk v0.2026259.2136
+	github.com/opencharly/spec v0.2026259.2033
 	gopkg.in/yaml.v3 v3.0.1
 )
 

@@ -138,17 +138,17 @@ type LLMParams struct {
 
 	// response_format: the structured-output contract (text | json_object |
 	// json_schema).
-	Response_format ResponseFormat `json:"response_format,omitempty"`
+	Response_format LLMResponseFormat `json:"response_format,omitempty"`
 
 	// reasoning_effort: thinking control for reasoning models ("none" disables
 	// thinking where the server honours it).
 	Reasoning_effort string `json:"reasoning_effort,omitempty"`
 
 	// reasoning: the object form of the same control (ollama accepts either).
-	Reasoning Reasoning `json:"reasoning,omitempty"`
+	Reasoning LLMReasoning `json:"reasoning,omitempty"`
 
 	// stream_options: streaming response options.
-	Stream_options StreamOptions `json:"stream_options,omitempty"`
+	Stream_options LLMStreamOptions `json:"stream_options,omitempty"`
 
 	// parallel_tool_calls: permit the model to emit several tool calls per turn.
 	Parallel_tool_calls *bool `json:"parallel_tool_calls,omitempty"`
@@ -176,9 +176,9 @@ type LLMParams struct {
 	Extra map[string]any/* CUE top */ `json:"extra,omitempty"`
 }
 
-// #ResponseFormat — the structured-output contract. type "json_schema" requires
+// #LLMResponseFormat — the structured-output contract. type "json_schema" requires
 // the json_schema block; the schema field is the JSON Schema itself.
-type ResponseFormat struct {
+type LLMResponseFormat struct {
 	Type string `json:"type"`
 
 	Json_schema struct {
@@ -192,13 +192,13 @@ type ResponseFormat struct {
 	} `json:"json_schema,omitempty"`
 }
 
-// #Reasoning — the object form of the reasoning/thinking control.
-type Reasoning struct {
+// #LLMReasoning — the object form of the reasoning/thinking control.
+type LLMReasoning struct {
 	Effort string `json:"effort,omitempty"`
 }
 
-// #StreamOptions — streaming response options.
-type StreamOptions struct {
+// #LLMStreamOptions — streaming response options.
+type LLMStreamOptions struct {
 	Include_usage *bool `json:"include_usage,omitempty"`
 }
 
@@ -547,8 +547,8 @@ type AgentRunInput struct {
 	Tools []string `json:"tools,omitempty"`
 }
 
-// #NamedToolChoice — force one named function tool.
-type NamedToolChoice struct {
+// #LLMNamedToolChoice — force one named function tool.
+type LLMNamedToolChoice struct {
 	Function struct {
 		Name string `json:"name"`
 	} `json:"function"`

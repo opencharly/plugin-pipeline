@@ -15,8 +15,10 @@ import (
 
 // P1 — the bare agent runtime: a direct chat-completions call with a fully
 // configurable system prompt (inline), optional skills appended, and optional
-// tools dispatched back to the engine (tools.go). The wire client is the
-// official openai-go SDK (llm.go); this file owns the turn loop + the skills /
+// tools dispatched back to the engine (tools.go). The wire client is the SHARED
+// github.com/opencharly/sdk/llmkit client, reached through the thin adapter in
+// llm.go (the client moved to the SDK so the `vision:` check verb speaks the
+// endpoint identically — R3); this file owns the turn loop + the skills /
 // typed-output contract.
 //
 // envMaxTurns / intValue / parseInt moved to llm.go with the config resolution

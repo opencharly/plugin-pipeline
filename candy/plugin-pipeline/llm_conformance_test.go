@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/sdk/llmkit"
 )
 
 // llm_conformance_test.go — the proof that the authored #LLMSpec/#LLMParams
@@ -150,14 +151,12 @@ func TestConformance_Vision(t *testing.T) {
 			}
 		})
 
-	// The vision path is exercised through the SDK message union directly: this
-	// is the shape a future screenshot-vision verb will send.
-	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
-	parts := []any{
-		map[string]any{"type": "text", "text": "what is in this screenshot?"},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "data:image/png;base64,iVBORw0KGgo="}},
-	}
-	if _, err := openaiUserPartsChat(t.Context(), nil, parts); err != nil {
+	// The vision path goes through the SHARED client's ChatVision (the engine's
+	// chatVision is a thin adapter over it), which sends exactly this shape.
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	cfg := llmkit.Default()
+	cfg.BaseURL = srv.URL
+	if _, err := llmkit.ChatVision(t.Context(), cfg, "what is in this screenshot?", []string{img}); err != nil {
 		t.Fatalf("vision chat: %v", err)
 	}
 }
@@ -219,14 +218,14 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 		Seed:                  &seed,
 		Stop:                  []any{"A", "B"},
 		Reasoning_effort:      "high",
-		Stream_options:        params.StreamOptions{Include_usage: openaiBoolPtr(true)},
+		Stream_options:        params.LLMStreamOptions{Include_usage: openaiBoolPtr(true)},
 		Parallel_tool_calls:   &parallel,
 		Logprobs:              &logprobs,
 		Top_logprobs:          &topLog,
 		User:                  "u-1",
 		Metadata:              map[string]string{"k": "v"},
 		Logit_bias:            map[string]int64{"5": 1},
-		Response_format:       params.ResponseFormat{Type: "json_object"},
+		Response_format:       params.LLMResponseFormat{Type: "json_object"},
 		Tool_choice:           "required",
 		Extra:                 map[string]any{"custom_knob": 7},
 	}}}
@@ -279,15 +278,14 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 // rendered as the OpenAI json_schema object (not just json_object).
 func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
 	rc := &runCtx{llm: params.LLMSpec{Params: params.LLMParams{
-		Response_format: params.ResponseFormat{
-			Type: "json_schema",
-			Json_schema: struct {
-				Name        string         `json:"name"`
-				Description string         `json:"description,omitempty"`
-				Schema      map[string]any `json:"schema"`
-				Strict      bool           `json:"strict,omitempty"`
-			}{Name: "verdict", Description: "d", Schema: map[string]any{"type": "object"}, Strict: true},
-		},
+		Response_format: func() params.LLMResponseFormat {
+			rf := params.LLMResponseFormat{Type: "json_schema"}
+			rf.Json_schema.Name = "verdict"
+			rf.Json_schema.Description = "d"
+			rf.Json_schema.Schema = map[string]any{"type": "object"}
+			rf.Json_schema.Strict = true
+			return rf
+		}(),
 	}}}
 	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "{}") },
 		func(t *testing.T, body map[string]any) {
@@ -320,15 +318,18 @@ func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 		Model:  "stage-model",
 		Params: params.LLMParams{Temperature: &stageTemp},
 	}
-	got := resolveLLM(rc, stage)
-	if got.model != "stage-model" {
-		t.Errorf("model: stage must win, got %q", got.model)
+	got, err := resolveLLM(rc, stage)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.p.Temperature == nil || *got.p.Temperature != 0.1 {
-		t.Errorf("temperature: stage must win, got %v", got.p.Temperature)
+	if got.Model != "stage-model" {
+		t.Errorf("model: stage must win, got %q", got.Model)
 	}
-	if got.p.Top_p == nil || *got.p.Top_p != 0.5 {
-		t.Errorf("top_p: the entity value must survive a stage override of another field, got %v", got.p.Top_p)
+	if got.Params.Temperature == nil || *got.Params.Temperature != 0.1 {
+		t.Errorf("temperature: stage must win, got %v", got.Params.Temperature)
+	}
+	if got.Params.Top_p == nil || *got.Params.Top_p != 0.5 {
+		t.Errorf("top_p: the entity value must survive a stage override of another field, got %v", got.Params.Top_p)
 	}
 }
 
@@ -338,7 +339,11 @@ func TestConformance_EnvBeatsStageAndEntity(t *testing.T) {
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model"}}
 	stage := &params.StageLLMSpec{Model: "stage-model"}
-	if got := resolveLLM(rc, stage).model; got != "env-model" {
+	resolved, err := resolveLLM(rc, stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := resolved.Model; got != "env-model" {
 		t.Fatalf("model: env must win, got %q", got)
 	}
 }
@@ -399,15 +404,18 @@ func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 		Idle_timeout: "45s",
 		Max_retries:  &retries,
 	}}
-	got := resolveLLM(rc, nil)
-	if got.timeout.String() != "1m30s" {
-		t.Errorf("timeout: got %s, want 1m30s", got.timeout)
+	got, err := resolveLLM(rc, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.idleTimeout.String() != "45s" {
-		t.Errorf("idle_timeout: got %s, want 45s", got.idleTimeout)
+	if got.Timeout.String() != "1m30s" {
+		t.Errorf("timeout: got %s, want 1m30s", got.Timeout)
 	}
-	if got.maxRetries != 0 {
-		t.Errorf("max_retries: got %d, want 0", got.maxRetries)
+	if got.IdleTimeout.String() != "45s" {
+		t.Errorf("idle_timeout: got %s, want 45s", got.IdleTimeout)
+	}
+	if got.MaxRetries != 0 {
+		t.Errorf("max_retries: got %d, want 0", got.MaxRetries)
 	}
 }
 
@@ -429,3 +437,85 @@ func TestConformance_ExtraEscapeHatchIsOrdered(t *testing.T) {
 // openaiBoolPtr is the test-local bool pointer helper (the generated param
 // fields are *bool).
 func openaiBoolPtr(b bool) *bool { return &b }
+
+// TestToSpecLLM_PropagatesErrors: the bridge must NEVER silently degrade to a zero
+// config — a failed conversion would drop the entire authored llm: block and let
+// the lane fall back to defaults (the silent-config-failure class R1 forbids).
+// A value json.Marshal cannot encode (a channel) is the honest failure path.
+func TestToSpecLLM_PropagatesErrors(t *testing.T) {
+	if _, err := toSpecLLM(make(chan int)); err == nil {
+		t.Fatal("an unencodable value must return an error, never a zero spec.LLMSpec")
+	}
+	// the happy path still works for both caller shapes
+	e, err := toSpecLLM(params.LLMSpec{Model: "m"})
+	if err != nil || e.Model != "m" {
+		t.Fatalf("entity bridge: %v model=%q", err, e.Model)
+	}
+	st, err := toSpecLLM(params.StageLLMSpec{Model: "s"})
+	if err != nil || st.Model != "s" {
+		t.Fatalf("stage bridge: %v model=%q", err, st.Model)
+	}
+}
+
+// TestChatVision_AdapterDrivesTheSharedClient: the engine's SHIPPED chatVision
+// adapter must be the thing under test. The first revision of the rewire deleted
+// the vision seam and pointed the conformance test at llmkit.ChatVision
+// DIRECTLY, so nothing failed if the adapter itself broke (the validator caught
+// exactly that). This test drives the ADAPTER: a vision message must reach the
+// server as content parts with an image_url data URL, and the adapter must return
+// the model's text.
+func TestChatVision_AdapterDrivesTheSharedClient(t *testing.T) {
+	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "a red square") },
+		func(t *testing.T, body map[string]any) {
+			msgs, _ := body["messages"].([]any)
+			if len(msgs) == 0 {
+				t.Fatal("no messages")
+			}
+			user, _ := msgs[0].(map[string]any)
+			parts, ok := user["content"].([]any)
+			if !ok {
+				t.Fatalf("content must be a content-parts array, got %T", user["content"])
+			}
+			var sawImage bool
+			for _, p := range parts {
+				pm, _ := p.(map[string]any)
+				if pm["type"] == "image_url" {
+					sawImage = true
+					iu, _ := pm["image_url"].(map[string]any)
+					if url, _ := iu["url"].(string); !strings.HasPrefix(url, "data:image/png;base64,") {
+						t.Errorf("image must be a base64 data URL, got %q", url)
+					}
+				}
+			}
+			if !sawImage {
+				t.Error("the adapter did not send the image as a content part")
+			}
+		})
+
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	got, err := chatVision(t.Context(), rc, nil, "what is this?", []string{img})
+	if err != nil {
+		t.Fatalf("chatVision adapter: %v", err)
+	}
+	if got != "a red square" {
+		t.Fatalf("adapter reply = %q, want %q", got, "a red square")
+	}
+}
+
+// TestChatVision_AdapterPropagatesBridgeError: a client failure must surface
+// through the adapter (never a silent empty reply). The mock returns a 500, so
+// the failure is deterministic and does not depend on a live endpoint.
+func TestChatVision_AdapterPropagatesBridgeError(t *testing.T) {
+	srv := captureLLM(t, func(rw http.ResponseWriter) {
+		rw.WriteHeader(http.StatusInternalServerError)
+		_, _ = rw.Write([]byte(`{"error":{"message":"boom"}}`))
+	}, nil)
+	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
+	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
+	if _, err := chatVision(t.Context(), rc, nil, "q", []string{img}); err == nil {
+		t.Fatal("the adapter must surface a client failure, never an empty reply")
+	}
+}

@@ -71,15 +71,18 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 // built-in default (the LOCAL ollama server model) applies. FAILS without the
 // deepseek-v4.1-flash:cloud default (the V4.0->V4.1 cutover).
 func TestLLMDefaultModel(t *testing.T) {
-	got := resolveLLM(nil, nil)
-	if got.model != "deepseek-v4.1-flash:cloud" {
-		t.Errorf("default model: got %q, want \"deepseek-v4.1-flash:cloud\"", got.model)
+	got, err := resolveLLM(nil, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got.baseURL != "http://localhost:11434/v1" {
-		t.Errorf("default base_url: got %q, want http://localhost:11434/v1", got.baseURL)
+	if got.Model != "deepseek-v4.1-flash:cloud" {
+		t.Errorf("default model: got %q, want \"deepseek-v4.1-flash:cloud\"", got.Model)
 	}
-	if got.apiKey != "" {
-		t.Errorf("default api_key must be ABSENT, got %q", got.apiKey)
+	if got.BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("default base_url: got %q, want http://localhost:11434/v1", got.BaseURL)
+	}
+	if got.APIKey != "" {
+		t.Errorf("default api_key must be ABSENT, got %q", got.APIKey)
 	}
 }
 
