@@ -112,75 +112,83 @@ func entityDocs(dir string) ([]string, error) {
 	return paths, nil
 }
 
-// resolveNamedNode returns the YAML node of the entity named `name` from the first
-// document (root-wins) that declares it, using ONE document walk shared by every
-// by-name resolver (R3). It walks each document once and returns the first node
-// whose top-level key matches — the kind is the CALLER's concern (a pipeline
-// resolver checks the node's `pipeline:` key; a bed resolver accepts any kind).
+// entityNodeFunc visits one document that declares the sought name. stop=true ends the walk
+// (root-wins); a non-nil error aborts with that cause.
+type entityNodeFunc func(node yaml.Node, path string) (stop bool, err error)
+
+// walkNamedEntity is the ONE by-name document walk (R3): it enumerates the project's documents in
+// precedence order (root → flat `import:` siblings → `discover:`d manifests, via entityDocs) and
+// calls fn for each that declares `name`. loadEntity and findBedEntity both drive THIS walk, so
+// their resolution semantics cannot drift.
 //
-// read/parse failures on a declared document are surfaced (R1); a missing file on
-// an import path is a failure too (the project declared it).
-func resolveNamedNode(dir, name string) (yaml.Node, string, error) {
+// read/parse failures on a document the resolver was INSTRUCTED to read are surfaced (R1), never
+// silently skipped.
+func walkNamedEntity(dir, name string, fn entityNodeFunc) error {
 	paths, err := entityDocs(dir)
 	if err != nil {
-		return yaml.Node{}, "", err
+		return err
 	}
 	for _, p := range paths {
 		raw, rerr := os.ReadFile(p)
 		if rerr != nil {
-			return yaml.Node{}, "", fmt.Errorf("read %s: %w", p, rerr)
+			return fmt.Errorf("read %s: %w", p, rerr)
 		}
 		var doc map[string]yaml.Node
 		if uerr := yaml.Unmarshal(raw, &doc); uerr != nil {
-			return yaml.Node{}, "", fmt.Errorf("parse %s: %w", p, uerr)
-		}
-		if node, ok := doc[name]; ok {
-			return node, p, nil
-		}
-	}
-	return yaml.Node{}, "", nil
-}
-
-// loadEntity resolves the named kind:pipeline entity from the project's documents
-// (root-wins) and returns its validated body.
-func loadEntity(name string) (params.PipelineInput, error) {
-	paths, err := entityDocs(projectDir())
-	if err != nil {
-		return params.PipelineInput{}, err
-	}
-	// The loader permits the SAME name under DIFFERENT kinds across separate documents
-	// (cross-file reuse), so a wrong-kind node must not shadow a pipeline entity in a
-	// later document — keep looking for the pipeline kind, and report wrong-kind only
-	// if NO document declares it as a pipeline.
-	wrongKindPath := ""
-	for _, p := range paths {
-		raw, rerr := os.ReadFile(p)
-		if rerr != nil {
-			return params.PipelineInput{}, fmt.Errorf("read %s: %w", p, rerr)
-		}
-		var doc map[string]yaml.Node
-		if uerr := yaml.Unmarshal(raw, &doc); uerr != nil {
-			return params.PipelineInput{}, fmt.Errorf("parse %s: %w", p, uerr)
+			return fmt.Errorf("parse %s: %w", p, uerr)
 		}
 		node, ok := doc[name]
 		if !ok {
 			continue
 		}
+		stop, ferr := fn(node, p)
+		if ferr != nil {
+			return ferr
+		}
+		if stop {
+			return nil
+		}
+	}
+	return nil
+}
+
+// loadEntity resolves the named kind:pipeline entity from the project's documents
+// (root-wins) and returns its validated body.
+func loadEntity(name string) (params.PipelineInput, error) {
+	// The loader permits the SAME name under DIFFERENT kinds across separate documents
+	// (cross-file reuse), so a wrong-kind node must not shadow a pipeline entity in a
+	// later document — keep looking for the pipeline kind, and report wrong-kind only
+	// if NO document declares it as a pipeline.
+	var result params.PipelineInput
+	found := false
+	wrongKindPath := ""
+	err := walkNamedEntity(projectDir(), name, func(node yaml.Node, path string) (bool, error) {
 		var m map[string]yaml.Node
 		if derr := node.Decode(&m); derr != nil {
-			return params.PipelineInput{}, fmt.Errorf("pipeline entity %q decode (%s): %w", name, p, derr)
+			return false, fmt.Errorf("pipeline entity %q decode (%s): %w", name, path, derr)
 		}
 		body, ok := m["pipeline"]
 		if !ok {
-			wrongKindPath = p // remember; keep looking for a real pipeline entity
-			continue
+			wrongKindPath = path
+			return false, nil // keep looking for a real pipeline entity
 		}
-		return decodePipelineInput(name, p, body)
+		p, derr := decodePipelineInput(name, path, body)
+		if derr != nil {
+			return false, derr
+		}
+		result, found = p, true
+		return true, nil
+	})
+	if err != nil {
+		return params.PipelineInput{}, err
 	}
-	if wrongKindPath != "" {
-		return params.PipelineInput{}, fmt.Errorf("pipeline entity %q in %s has no pipeline: kind", name, wrongKindPath)
+	if !found {
+		if wrongKindPath != "" {
+			return params.PipelineInput{}, fmt.Errorf("pipeline entity %q in %s has no pipeline: kind", name, wrongKindPath)
+		}
+		return params.PipelineInput{}, fmt.Errorf("pipeline entity %q not found in charly.yml or any imported/discovered document", name)
 	}
-	return params.PipelineInput{}, fmt.Errorf("pipeline entity %q not found in charly.yml or any imported/discovered document", name)
+	return result, nil
 }
 
 // decodePipelineInput marshals + schema-validates + decodes the `pipeline:` body.
