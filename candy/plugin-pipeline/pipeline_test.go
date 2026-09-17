@@ -142,3 +142,68 @@ func TestCLIValidate(t *testing.T) {
 		t.Fatalf("validate: %d %v", code, err)
 	}
 }
+
+// A kind:pipeline entity may live in a FLAT `import:` sibling file (the
+// documented per-kind split, e.g. `- pipelines.yml`) or a `discover:`d
+// manifest — the loader accepts both, so the plugin's own CLI resolver must
+// too. The predecessor read ONLY <projectDir>/charly.yml, so `charly pipeline
+// run <entity>` reported "not found in charly.yml" for an entity `charly box
+// validate` had already accepted.
+func TestCLIValidate_FlatImportSibling(t *testing.T) {
+	dir := t.TempDir()
+	root := "version: 2026.249.2125\nimport:\n    - pipelines.yml\n"
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pipe := "split-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	if code, err := runCLI([]string{"validate", "split-plan"}, nil); err != nil || code != 0 {
+		t.Fatalf("flat-import sibling entity not resolved: %d %v", code, err)
+	}
+}
+
+// A kind:pipeline entity may live in a `discover:`d manifest directory.
+func TestCLIValidate_DiscoveredManifest(t *testing.T) {
+	dir := t.TempDir()
+	root := "version: 2026.249.2125\ndiscover:\n    - path: check\n      recursive: true\n"
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "check", "plan")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pipe := "discovered-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	if err := os.WriteFile(filepath.Join(sub, "charly.yml"), []byte(pipe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	if code, err := runCLI([]string{"validate", "discovered-plan"}, nil); err != nil || code != 0 {
+		t.Fatalf("discovered entity not resolved: %d %v", code, err)
+	}
+}
+
+// A same-named entity of a DIFFERENT kind must not shadow the pipeline entity
+// further down the precedence chain (root-wins applies only to the SAME kind).
+func TestCLIValidate_RootWinsSameKind(t *testing.T) {
+	dir := t.TempDir()
+	// the root declares the name as a (non-pipeline) local entity; the import
+	// declares it as the pipeline — the root's different-kind node must not be
+	// mistaken for the pipeline entity.
+	root := "version: 2026.249.2125\nimport:\n    - pipelines.yml\n" +
+		"split-plan:\n  local:\n    plan:\n      - check: x\n        command: 'true'\n"
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pipe := "split-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	if code, err := runCLI([]string{"validate", "split-plan"}, nil); err != nil || code != 0 {
+		t.Fatalf("different-kind root node shadowed the pipeline entity: %d %v", code, err)
+	}
+}
