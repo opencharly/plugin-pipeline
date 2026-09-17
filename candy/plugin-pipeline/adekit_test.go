@@ -19,6 +19,12 @@ import (
 // a real bed never does — so the drive read ZERO ops and reported a vacuous PASS.
 func TestBedPlanOps_ExtractsTheRenderedPlan(t *testing.T) {
 	dir := t.TempDir()
+	// The REAL lane shape: a root charly.yml discovers eval/ (findBedEntity resolves
+	// through the SAME project-directive walk loadEntity uses).
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(
+		"version: 2026.249.2125\ndiscover:\n    - path: eval\n      recursive: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	bed := filepath.Join(dir, "eval", "pr-42", "charly.yml")
 	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
 		t.Fatal(err)
@@ -108,6 +114,10 @@ func TestBedPlanOps_PlanlessEntityFails(t *testing.T) {
 // handled fail results, so the drive reports FAIL rather than crashing.
 func TestRunAdeBedKit_NilExecutorMapsToFail(t *testing.T) {
 	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(
+		"version: 2026.249.2125\ndiscover:\n    - path: eval\n      recursive: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	bed := filepath.Join(dir, "eval", "pr-7", "charly.yml")
 	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
 		t.Fatal(err)

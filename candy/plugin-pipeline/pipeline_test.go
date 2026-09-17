@@ -207,3 +207,79 @@ func TestCLIValidate_RootWinsSameKind(t *testing.T) {
 		t.Fatalf("different-kind root node shadowed the pipeline entity: %d %v", code, err)
 	}
 }
+
+// TestLoadEntity_MalformedRootSurfacesCause — a malformed ROOT charly.yml must surface its PARSE
+// cause, never be mis-reported as "entity not found" (the masking regression this resolver
+// avoids; R1). The predecessor's blanket `continue` on a parse error flattened it.
+func TestLoadEntity_MalformedRootSurfacesCause(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte("import: [unclosed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	_, err := loadEntity("anything")
+	if err == nil {
+		t.Fatal("a malformed root must error")
+	}
+	if !strings.Contains(err.Error(), "parse") || !strings.Contains(err.Error(), "charly.yml") {
+		t.Fatalf("a malformed root must name the parse cause + file, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "not found") {
+		t.Fatalf("a malformed root must NOT be reported as 'not found', got: %v", err)
+	}
+}
+
+// TestLoadEntity_MissingImportPathSurfacesCause — an `import:` path the project declares but that
+// cannot be read must surface, not degrade to "not found".
+func TestLoadEntity_MissingImportPathSurfacesCause(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte("version: 2026.249.2125\nimport:\n    - missing.yml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// the entity lives nowhere; the DECLARED import is missing -> that is the real cause.
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	_, err := loadEntity("my-plan")
+	if err == nil {
+		t.Fatal("a declared-but-missing import must error")
+	}
+	if !strings.Contains(err.Error(), "missing.yml") {
+		t.Fatalf("a missing import path must be named, got: %v", err)
+	}
+}
+
+// TestLoadEntity_WrongKindIsNamed — a name present under a DIFFERENT kind must say so, not
+// "not found".
+func TestLoadEntity_WrongKindIsNamed(t *testing.T) {
+	dir := t.TempDir()
+	cfg := "version: 2026.249.2125\nmy-plan:\n    local:\n        plan:\n            - check: x\n              command: 'true'\n"
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHARLY_PROJECT_DIR", dir)
+	_, err := loadEntity("my-plan")
+	if err == nil {
+		t.Fatal("a name under the wrong kind must error")
+	}
+	if !strings.Contains(err.Error(), "has no pipeline: kind") {
+		t.Fatalf("a wrong-kind name must be diagnosed as such, got: %v", err)
+	}
+}
+
+// TestFindBedEntity_UsesSharedResolver — findBedEntity must find a bed declared in a FLAT
+// imported sibling (the same documents loadEntity resolves), proving the ONE shared resolver
+// covers both callers (R3).
+func TestFindBedEntity_UsesSharedResolver(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte("version: 2026.249.2125\nimport:\n    - beds.yml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "beds.yml"), []byte("check-bed:\n    vm:\n        from: x\n        disposable: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findBedEntity(dir, "check-bed"); got == "" {
+		t.Fatal("findBedEntity must find a bed declared in a flat-imported sibling (shared resolver)")
+	}
+	if got := findBedEntity(dir, "no-such-bed"); got != "" {
+		t.Fatalf("findBedEntity on an absent name = %q, want empty", got)
+	}
+}

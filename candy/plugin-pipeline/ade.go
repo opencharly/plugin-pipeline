@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -149,20 +148,16 @@ func adeVerdictForExit(code int) string {
 	}
 }
 
-// findBedEntity: a bounded search for a charly.yml under the workdir that
-// declares the named check-bed entity (the by-name resolution fallback).
+// findBedEntity returns the charly.yml that declares the named check-bed entity, using the SAME
+// by-name document resolver loadEntity uses (R3 — ONE resolver, so bed and pipeline resolution
+// cannot drift). Empty string when no document declares the name (or the project cannot be read;
+// the caller treats that as "bed missing", and a genuinely broken project surfaces at the deploy
+// the caller then runs). The bed may live in the root charly.yml or any flat `import:` sibling /
+// `discover:`d manifest — including the rendered `eval/pr-<N>/charly.yml` the lane commits.
 func findBedEntity(workdir, name string) string {
-	found := ""
-	_ = filepath.Walk(workdir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() || !strings.HasSuffix(path, "charly.yml") {
-			return nil
-		}
-		b, rerr := os.ReadFile(path)
-		if rerr == nil && strings.Contains(string(b), name+":") {
-			found = path
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	return found
+	_, path, err := resolveNamedNode(workdir, name)
+	if err != nil {
+		return ""
+	}
+	return path
 }
