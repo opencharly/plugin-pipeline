@@ -15,6 +15,13 @@ plugin-pipeline:
                 - kind:pipeline
             source: github.com/opencharly/plugin-pipeline/candy/plugin-pipeline
         plan:
+            - check: the pipeline-skill skill entity is present in this candy's manifest (fails if the entity is removed)
+              id: pipeline-skill-present
+              context:
+                - build
+              command: |
+                  command: grep -q '^pipeline-skill:' charly.yml
+                  in_container: false
             - check: the pipeline module ships (go.mod + the executor + generated params)
               id: plugin-pipeline-module-present
               context: [build]
