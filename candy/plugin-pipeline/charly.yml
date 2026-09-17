@@ -15,7 +15,50 @@ plugin-pipeline:
                 - kind:pipeline
             source: github.com/opencharly/plugin-pipeline/candy/plugin-pipeline
         plan:
+            - check: the pipeline-skill skill entity is present in this candy's manifest (fails if the entity is removed)
+              id: pipeline-skill-present
+              context:
+                - build
+              command: "grep -q '^pipeline-skill:' charly.yml"
             - check: the pipeline module ships (go.mod + the executor + generated params)
               id: plugin-pipeline-module-present
               context: [build]
               command: "test -f go.mod && test -f executor.go && test -f params/cue_types_gen.go"
+
+pipeline-skill:
+    skill:
+        name: pipeline
+        family: pipeline
+        owner: plugin-pipeline
+        description: |-
+            The `charly pipeline` agent/workflow engine — run a declared plan, the bare agent
+            runtime, deterministic probe verbs, template rendering. Use for kind:pipeline entities.
+        triggers:
+            - "`charly pipeline` / agent workflow engine / kind:pipeline / pipeline run"
+        content: |
+            # charly pipeline — the generic agent/workflow engine
+
+            `charly pipeline` is the domain-neutral agent/workflow engine. Served by
+            `candy/plugin-pipeline` (`command:pipeline`, out-of-process over gRPC).
+
+            ## What it provides
+
+            - the bare agent runtime (the plan agent stage + the standalone `charly pipeline agent`);
+            - the plan executor — `charly pipeline run <entity>`;
+            - deterministic probe verbs;
+            - template/frontmatter rendering;
+            - redo + fail-hard semantics;
+            - skills by `@github` candy refs.
+
+            Every pipeline is a DECLARED plan (`kind:pipeline` entity, SDD CUE-first), so the
+            engine is config-driven rather than code-driven.
+
+            ## When to use it
+
+            To run or author a `kind:pipeline` entity, or to build an agent workflow that joins
+            the runtime through configuration (e.g. the `charly review --plan` executor).
+
+            ## Cross-References
+
+            - `/charly-internals:plugin` — the plugin/provider model.
+            - `/charly-internals:go` — `kind:` schema authoring (SDD).
