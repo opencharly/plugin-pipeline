@@ -128,8 +128,15 @@ func TestProbeExpectExit(t *testing.T) {
 }
 
 func TestFindBedEntity(t *testing.T) {
+	// The REAL lane shape: the workdir's root charly.yml `discover:`s eval/, and the
+	// rendered per-PR bed lives at eval/pr-<N>/charly.yml. findBedEntity resolves it
+	// through the SAME project-directive walk loadEntity uses.
 	dir := t.TempDir()
-	sub := filepath.Join(dir, "pr-beds", "pr-1")
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(
+		"version: 2026.249.2125\ndiscover:\n    - path: eval\n      recursive: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "eval", "pr-1")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -138,6 +145,65 @@ func TestFindBedEntity(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := findBedEntity(dir, "check-omarchy-pr-1-vm"); got == "" {
-		t.Fatal("by-name fallback should find the bed")
+		t.Fatal("by-name resolver should find the discovered bed")
+	}
+}
+
+// TestFindBedEntity_RealLaneRootDiscoversEval proves the REAL lane shape resolves: the repo root
+// charly.yml declares `discover: - path: eval`, and the rendered bed lives at
+// eval/pr-<N>/charly.yml. This mirrors eval-omarchy's actual root (verified: its charly.yml has
+// `path: eval` recursive).
+func TestFindBedEntity_RealLaneRootDiscoversEval(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(
+		"version: 2026.249.2125\ndiscover:\n    - path: eval\n      recursive: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bed := filepath.Join(dir, "eval", "pr-9", "charly.yml")
+	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bed, []byte("check-omarchy-pr-9-vm:\n    vm:\n        from: x\n        disposable: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findBedEntity(dir, "check-omarchy-pr-9-vm"); got == "" {
+		t.Fatal("the real lane shape (root discover: eval + eval/pr-9/charly.yml) must resolve")
+	}
+}
+
+// TestFindBedEntity_FallbackWhenRootUnreachable proves the bounded fallback: a bed the directive
+// walk cannot reach (no root charly.yml at all) is still found, so an unreachable root cannot
+// masquerade as "bed missing" (which would yield a vacuous PASS downstream).
+func TestFindBedEntity_FallbackWhenRootUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	// NO root charly.yml — the directive walk cannot start.
+	bed := filepath.Join(dir, "pr-beds", "pr-1", "charly.yml")
+	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bed, []byte("check-omarchy-pr-1-vm:\n    vm:\n        from: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findBedEntity(dir, "check-omarchy-pr-1-vm"); got == "" {
+		t.Fatal("the bounded fallback must still find a bed when the root is unreachable")
+	}
+}
+
+// TestFindBedEntity_FallbackAfterMalformedRoot proves a malformed root does not collapse to
+// "bed missing".
+func TestFindBedEntity_FallbackAfterMalformedRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte("import: [unclosed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bed := filepath.Join(dir, "beds", "charly.yml")
+	if err := os.MkdirAll(filepath.Dir(bed), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bed, []byte("check-x:\n    vm:\n        from: x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findBedEntity(dir, "check-x"); got == "" {
+		t.Fatal("a malformed root must not collapse to 'bed missing' — the fallback must find the bed")
 	}
 }

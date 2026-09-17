@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // runAdeBed invokes the org's check-run for the rendered bed and maps its exit
@@ -149,9 +151,34 @@ func adeVerdictForExit(code int) string {
 	}
 }
 
-// findBedEntity: a bounded search for a charly.yml under the workdir that
-// declares the named check-bed entity (the by-name resolution fallback).
+// findBedEntity returns the charly.yml that declares the named check-bed entity.
+//
+// PRIMARY: the SAME by-name document resolver loadEntity uses (R3 — walkNamedEntity), which
+// follows the project's root → `import:` → `discover:` directives.
+//
+// FALLBACK: if that walk cannot reach the bed (no root charly.yml, an unparseable root, or the
+// bed's directory is not declared by any directive), a bounded filesystem search finds any
+// charly.yml under the workdir that declares the name. This exists because the check drive must
+// not report "bed missing" for a bed the rendered eval/pr-<N>/charly.yml layout may reach without
+// the root declaring it — and because an unresolved bed plan yields a VACUOUS PASS downstream, so
+// a false "missing" is worse than a bounded search. The fallback is a plain substring probe
+// (name + ':'), matching the pre-change discovery behaviour.
 func findBedEntity(workdir, name string) string {
+	found := ""
+	_ = walkNamedEntity(workdir, name, func(_ yaml.Node, path string) (bool, error) {
+		found = path
+		return true, nil
+	})
+	if found != "" {
+		return found
+	}
+	return findBedEntityByWalk(workdir, name)
+}
+
+// findBedEntityByWalk is the bounded filesystem fallback: a walk of every charly.yml under the
+// workdir, returning the first that mentions the name. Used only when the directive walk reaches
+// no declaring document.
+func findBedEntityByWalk(workdir, name string) string {
 	found := ""
 	_ = filepath.Walk(workdir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, "charly.yml") {
