@@ -55,6 +55,5 @@ pipeline-skill:
 
             ## Cross-References
 
-            - `/charly-review:review` — the PR review engine built on the same runtime.
             - `/charly-internals:plugin` — the plugin/provider model.
             - `/charly-internals:go` — `kind:` schema authoring (SDD).
