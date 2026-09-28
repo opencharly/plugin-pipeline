@@ -1,6 +1,5 @@
 plugin-pipeline:
     candy:
-        version: 2026.251.0000
         description: |-
             The generic agent/workflow engine — domain-neutral: the bare agent
             runtime (plan agent stage + the standalone 'charly pipeline agent'),
@@ -24,7 +23,6 @@ plugin-pipeline:
               id: plugin-pipeline-module-present
               context: [build]
               command: "test -f go.mod && test -f executor.go && test -f params/cue_types_gen.go"
-
 pipeline-skill:
     skill:
         name: pipeline
