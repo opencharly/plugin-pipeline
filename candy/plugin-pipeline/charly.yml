@@ -1,6 +1,5 @@
 plugin-pipeline:
     candy:
-        version: 2026.251.0000
         description: |-
             The generic agent/workflow engine — domain-neutral: the bare agent
             runtime (plan agent stage + the standalone 'charly pipeline agent'),
