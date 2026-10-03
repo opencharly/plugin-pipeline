@@ -58,6 +58,12 @@ type runCtx struct {
 	llm    params.LLMSpec
 	media  map[string]any // the entity's media: block (files/min/dir)
 	skills map[string]any // the entity's skills: block (corpus) — the agent-stage skill corpus
+	// resolveOverride, when set, IS the reference resolver (see verb_env.go): a
+	// LIFTED VERB rebuilds its run context from a verbEnv, and this wires that
+	// context back to the live run's own resolver — env + @stage refs intact for
+	// the plan path, identity for a standalone verb dispatch. Nil in every other
+	// construction, so an ordinary runCtx is byte-for-byte the resolver it was.
+	resolveOverride func(string) string
 }
 
 // StageResult is one ledger row.
@@ -120,6 +126,9 @@ var refRe = regexp.MustCompile(`\$(pr|calver|workdir)|\$env\.([A-Z0-9_]+)|@([A-Z
 // resolveRefs replaces $pr/$calver/$workdir/$env.NAME/@stage.output(.field) in a
 // string. Values are typed for stage inputs (see resolveValue).
 func (rc *runCtx) resolveRefs(s string) string {
+	if rc.resolveOverride != nil {
+		return rc.resolveOverride(s)
+	}
 	return refRe.ReplaceAllStringFunc(s, func(m string) string {
 		g := refRe.FindStringSubmatch(m)
 		switch {
@@ -505,9 +514,16 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 			return res, nil
 		}
 	}
+	// The seven workflow stage kinds below are LIFTED VERBS (verb_<word>.go): the
+	// arm delegates to the SAME handler a standalone `<word>: <input>` dispatch
+	// calls, so there is exactly ONE body per kind (R3). The handler returns the
+	// stage's Outputs plus a failure carrier; the ARM keeps the
+	// status/message/trigger bookkeeping (it owns the StageResult).
+	e := rc.verbEnv()
+	e.ctx, e.id, e.raw, e.l = ctx, id, raw, l
 	switch kind {
 	case "agent":
-		out, err := runAgentStage(ctx, rc, raw, l)
+		out, err := runVerbAgent(decodeStageInput[params.PipelineAgentInput](raw), e)
 		res.Outputs = out
 		if re, ok := err.(*redoError); ok {
 			res.Status = "fail"
@@ -517,144 +533,28 @@ func (rc *runCtx) runStage(ctx context.Context, kind, id string, raw map[string]
 		}
 		return res, err
 	case "probe":
-		verbs := strList(raw["verbs"])
-		input := rc.resolveValue(anyMap(raw["input"]))
-		inputMap, _ := input.(map[string]any)
-		// path-valued inputs (bed/dir) are workdir-relative: root them at the
-		// run workdir (the pipeline may run from a different cwd, e.g. the eval
-		// lane's beds live in the eval-omarchy worktree).
-		if inputMap != nil && rc.workdir != "" {
-			for _, k := range []string{"bed", "dir"} {
-				if v := s(inputMap[k]); v != "" && !filepath.IsAbs(v) {
-					inputMap[k] = filepath.Join(rc.workdir, v)
-				}
-			}
-		}
-		for _, v := range verbs {
-			// per-verb scoped inputs: the entity may nest each verb's input under
-			// its name (media_gate: {...}) — use that when present.
-			verbInput := inputMap
-			if ni, ok := inputMap[v].(map[string]any); ok {
-				verbInput = ni
-			}
-			// the offline fixture mode (plan §2.3): a fixture: true input runs the
-			// probe against canned results - no live infra - so any pipeline's
-			// probes are testable offline.
-			if verbInput == nil {
-				verbInput = map[string]any{}
-			}
-			if f, _ := verbInput["fixture"].(bool); f {
-				if res.Outputs == nil {
-					res.Outputs = map[string]any{}
-				}
-				res.Outputs[v] = "pass"
-				continue
-			}
-			ok, msg, val := runProbeV(v, verbInput, rc)
-			if !ok {
-				res.Status = "fail"
-				res.Message = msg
-				res.Trigger = triggerOnFail(raw, "redo-plan")
-				return res, fmt.Errorf("probe %s failed: %s", v, msg)
-			}
-			if res.Outputs == nil {
-				res.Outputs = map[string]any{}
-			}
-			res.Outputs[v] = "pass"
-			if val != nil {
-				res.Outputs["value"] = val
-			}
-		}
-		// expose the probe VALUE: the declared outputs map to it (e.g. resolve_channel
-		// -> channel), and map values spread as named outputs (golden/provision).
-		for _, o := range strList(raw["outputs"]) {
-			if val, found := res.Outputs["value"]; found && o == "channel" {
-				res.Outputs[o] = val
-			}
-		}
-		if val, found := res.Outputs["value"]; found {
-			if m, ok := val.(map[string]any); ok {
-				for k, v := range m {
-					res.Outputs[k] = v
-				}
-			} else {
-				res.Outputs["channel"] = val
-			}
-		}
-		delete(res.Outputs, "value")
-		return res, nil
+		out, err := runVerbProbe(decodeStageInput[params.PipelineProbeInput](raw), e)
+		res.Outputs = out
+		return failOnVerb(res, err)
 	case "ade":
-		// the org-wide ADE: run the rendered ORACLE bed through the host's compiled-in
-		// check-run ONCE (the org R10 machinery + its ADE agent-check grading + the
-		// --var per-PR passthrough). The deterministic exit contract maps to the
-		// report verdict. (RCA: the external CLI dispatch has no reverse-channel
-		// executor - see ade.go header.)
-		var verdict, summary string
-		var aerr error
-		// the DECLARED bed (resolved) — the control bed runs the same ADE
-		// machinery on its own entity; the hardcoded -vm name is gone.
-		bed := rc.resolveRefs(asString(raw["bed"]))
-		if rc.ex != nil {
-			// the compiled-in placement: drive the bed's plan in-process (no charly spawn)
-			verdict, summary, _, aerr = runAdeBedKit(ctx, rc.pr, bed, rc.workdir, rc.ex)
-		} else {
-			// the un-compiled placement: the external charly check-run fallback.
-			// The lane's head comes from the run context (rc.env), NEVER the
-			// process env — the batch lanes are concurrent and the process env
-			// carries the operator's value or nothing (RCA: the live lane logged
-			// `--var PR_HEAD_SHA=`).
-			verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.env["PR_HEAD_SHA"], bed, rc.workdir)
+		out, err := runVerbAde(decodeStageInput[params.PipelineAdeInput](raw), e)
+		if out != nil {
+			res.Outputs = out
+			res.Message = s(out["summary"])
 		}
-		if aerr != nil {
-			res.Status = "fail"
-			res.Message = aerr.Error()
-			return res, aerr
-		}
-		if res.Outputs == nil {
-			res.Outputs = map[string]any{}
-		}
-		res.Outputs["verdict"] = verdict
-		res.Outputs["summary"] = summary
-		res.Message = summary
-		// fail_on: the declared verdicts are LANE DEFECTS, not eval outcomes —
-		// the stage fails with the redo trigger (the SETUP_DEFECT path) instead
-		// of flowing a worthless verdict downstream. The verdict is a GATE now.
-		for _, fv := range strList(raw["fail_on"]) {
-			if verdict == fv {
-				res.Status = "fail"
-				res.Trigger = "setup-defect"
-				return res, nil
-			}
-		}
-		return res, nil
+		return failOnVerb(res, err)
 	case "generate":
-		if err := rc.runGenerate(raw); err != nil {
-			res.Status = "fail"
-			res.Message = err.Error()
-			return res, err
-		}
-		return res, nil
+		_, err := runVerbGenerate(decodeStageInput[params.PipelineGenerateInput](raw), e)
+		return failOnVerb(res, err)
 	case "emit":
-		if err := rc.runEmit(raw); err != nil {
-			res.Status = "fail"
-			res.Message = err.Error()
-			return res, err
-		}
-		return res, nil
+		_, err := runVerbEmit(decodeStageInput[params.PipelineEmitInput](raw), e)
+		return failOnVerb(res, err)
 	case "media":
-		if err := rc.runMedia(raw, l); err != nil {
-			res.Status = "fail"
-			res.Message = err.Error()
-			return res, err
-		}
-		return res, nil
+		_, err := runVerbMedia(decodeStageInput[params.PipelineMediaInput](raw), e)
+		return failOnVerb(res, err)
 	case "gate":
-		if ok, msg := evalCondition(rc.resolveRefs(asString(raw["condition"]))); !ok {
-			res.Status = "fail"
-			res.Message = msg
-			return res, fmt.Errorf("gate %s: %s", id, msg)
-		}
-		return res, nil
+		_, err := runVerbGate(decodeStageInput[params.PipelineGateInput](raw), e)
+		return failOnVerb(res, err)
 	case "command": // EXTERNAL processes ONLY (never charly)
 		cmd := exec.CommandContext(ctx, "sh", "-c", rc.resolveRefs(asString(raw["command"])))
 		cmd.Env = os.Environ()
