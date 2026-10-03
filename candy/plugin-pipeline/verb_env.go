@@ -209,6 +209,7 @@ func failOnVerb(res *StageResult, err error) (*StageResult, error) {
 // thing.
 func invokeLiftedVerb[In any](ctx context.Context, req *pb.InvokeRequest, run func(In, *verbEnv) (map[string]any, error)) (*pb.InvokeReply, error) {
 	var in In
+	var pluginInput json.RawMessage
 	if pj := req.GetParamsJson(); len(pj) > 0 {
 		var wrap struct {
 			PluginInput json.RawMessage `json:"plugin_input"`
@@ -216,8 +217,9 @@ func invokeLiftedVerb[In any](ctx context.Context, req *pb.InvokeRequest, run fu
 		if err := json.Unmarshal(pj, &wrap); err != nil {
 			return nil, fmt.Errorf("pipeline verb %q: params decode: %w", req.GetReserved(), err)
 		}
-		if len(wrap.PluginInput) > 0 {
-			if err := json.Unmarshal(wrap.PluginInput, &in); err != nil {
+		pluginInput = wrap.PluginInput
+		if len(pluginInput) > 0 {
+			if err := json.Unmarshal(pluginInput, &in); err != nil {
 				return nil, fmt.Errorf("pipeline verb %q: input decode: %w", req.GetReserved(), err)
 			}
 		}
@@ -229,6 +231,20 @@ func invokeLiftedVerb[In any](ctx context.Context, req *pb.InvokeRequest, run fu
 	ex, _ := sdk.ExecutorForInvoke(ctx, req.GetExecutorBrokerId())
 	e := standaloneVerbEnv(ex, wd)
 	e.ctx = ctx
+	// The AUTHORED map for this dispatch is the wire's own plugin_input — carry
+	// it verbatim instead of reconstructing it from the typed struct, which
+	// cannot express ABSENCE for a struct-typed field (encoding/json's omitempty
+	// is inert for structs, so `llm:`/`cache:`/`redo:` would be fabricated as
+	// zero objects). With raw set from the wire, stageRaw hands the body exactly
+	// what was authored on BOTH paths. A dispatch that carries NO plugin_input
+	// authors nothing: the raw map is EMPTY, not a zero-struct reconstruction.
+	e.raw = map[string]any{}
+	if len(pluginInput) > 0 {
+		var rawMap map[string]any
+		if err := json.Unmarshal(pluginInput, &rawMap); err == nil {
+			e.raw = rawMap
+		}
+	}
 	if _, err := run(in, e); err != nil {
 		return verbReply("fail", err.Error()), nil
 	}

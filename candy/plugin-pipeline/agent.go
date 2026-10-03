@@ -158,16 +158,6 @@ func readAgentCache(rc *runCtx, raw map[string]any) (map[string]any, bool, error
 	}
 	path := rc.resolveRefs(s(spec["path"]))
 	key := rc.resolveRefs(s(spec["key"]))
-	if path == "" && key == "" {
-		// NO cache contract: #CacheSpec REQUIRES path AND key, so a block with
-		// both empty is not something an author writes — it is the ZERO struct a
-		// standalone verb dispatch materialises from its typed input (the input
-		// is decoded from the wire; there is no "absent" spelling for a struct
-		// field — see verb_env.go). A standalone `agent: {prompt: …}` must run the
-		// agent, not fail on a cache block that was never authored. A
-		// HALF-specified block (exactly one of the two) still hits the error below.
-		return nil, false, nil
-	}
 	keyField := s(spec["key_field"])
 	if keyField == "" {
 		keyField = "head"

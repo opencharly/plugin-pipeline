@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk"
 	pb "github.com/opencharly/spec/proto"
 )
@@ -151,4 +152,69 @@ func TestLiftedVerbsAreReachable(t *testing.T) {
 			t.Fatalf("unknown word error = %q, want it to contain %q", err.Error(), routingErrorSubstr)
 		}
 	})
+}
+
+// TestStandaloneStageRawPreservesAbsence locks the ABSENCE contract of the
+// standalone (verb-dispatch) path: what stageRaw hands a lifted handler must be
+// the AUTHORED plugin_input map — a key the author did not write must NOT exist.
+// This matters because the typed input cannot express absence: encoding/json's
+// omitempty is inert for STRUCT-typed fields, so #PipelineAgentInput always
+// round-trips `llm:`/`cache:`/`redo:`/`skills:` as ZERO objects. A stage body
+// that keys on presence (readAgentCache and stageLLM both type-assert
+// raw["cache"] / raw["llm"] to a map and branch on it) would then see blocks the
+// author never wrote — the defect that made a bare `agent:` step fail with
+// "agent cache: path + key required" before invokeLiftedVerb carried the wire map.
+//
+// The construction is invokeLiftedVerb's OWN — the same function Invoke's OpRun
+// arm calls — so this test cannot drift from the dispatch path it locks.
+//
+// BITES: with the wire map no longer carried into verbEnv.raw (stageRaw's
+// fallback to mapOf on the typed input), every key above reappears as a
+// fabricated zero object and this test fails naming it.
+func TestStandaloneStageRawPreservesAbsence(t *testing.T) {
+	const wire = `{"plugin_input":{"prompt":"say hi"}}`
+
+	var got map[string]any
+	run := func(in params.PipelineAgentInput, e *verbEnv) (map[string]any, error) {
+		got = e.stageRaw(in) // exactly what every lifted handler reads
+		return nil, nil
+	}
+	if _, err := invokeLiftedVerb(context.Background(), &pb.InvokeRequest{
+		Op:         sdk.OpRun,
+		Reserved:   "agent",
+		ParamsJson: []byte(wire),
+	}, run); err != nil {
+		t.Fatalf("invokeLiftedVerb: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("stageRaw returned a nil map; a body must read the authored map")
+	}
+	if v := got["prompt"]; v != "say hi" {
+		t.Errorf("authored prompt = %#v, want %q (the wire map must be carried verbatim)", v, "say hi")
+	}
+	// The struct-typed optional blocks of #PipelineAgentInput. `skills` is
+	// included on purpose: it is the same fabrication class (a struct-typed
+	// field), whether or not a body currently branches on presence.
+	for _, k := range []string{"llm", "cache", "redo", "skills"} {
+		if v, present := got[k]; present {
+			t.Errorf("stageRaw fabricated the ABSENT %q block (%#v); absence must survive the typed decode", k, v)
+		}
+	}
+
+	// A dispatch carrying NO plugin_input at all authors NOTHING: the map is
+	// empty, not a zero-struct reconstruction.
+	var empty map[string]any
+	runEmpty := func(in params.PipelineAgentInput, e *verbEnv) (map[string]any, error) {
+		empty = e.stageRaw(in)
+		return nil, nil
+	}
+	if _, err := invokeLiftedVerb(context.Background(), &pb.InvokeRequest{
+		Op:       sdk.OpRun,
+		Reserved: "agent",
+	}, runEmpty); err != nil {
+		t.Fatalf("invokeLiftedVerb (no plugin_input): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("an empty dispatch produced %#v, want an empty map", empty)
+	}
 }
