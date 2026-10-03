@@ -553,3 +553,106 @@ type LLMNamedToolChoice struct {
 		Name string `json:"name"`
 	} `json:"function"`
 }
+
+// ── Per-verb input shapes (the staged-verb cutover contract) ────────────────
+//
+// These are the per-verb input shapes for the six stage verbs (agent, probe,
+// ade, generate, emit, media) plus the deterministic gate. They are declared
+// NOW — before the verbs are lifted out of the pipeline executor into ordinary
+// `verb:` providers — so the lifted providers AND the migrator's frozen key
+// spellings have a SINGLE source to agree on. #MediaInput.assemble is retained
+// as a REQUIRED field even though no Go reader consults it: the retired grammar
+// declared it, and a field the old grammar accepted is never silently dropped.
+//
+// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
+// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+type AgentInput struct {
+	Prompt string `json:"prompt"`
+
+	Skill []string `json:"skill,omitempty"`
+
+	Tools []string `json:"tools,omitempty"`
+
+	Outputs map[string]OutputType `json:"outputs,omitempty"`
+
+	Max_turns int64 `json:"max_turns,omitempty"`
+
+	Llm LLMSpec `json:"llm,omitempty"`
+
+	Redo RedoSpec `json:"redo,omitempty"`
+
+	Cache CacheSpec `json:"cache,omitempty"`
+
+	Repo string `json:"repo,omitempty"`
+
+	Skills struct {
+		Corpus string `json:"corpus"`
+	} `json:"skills,omitempty"`
+}
+
+type ProbeInput struct {
+	Verbs []string `json:"verbs"`
+
+	Input map[string]any/* CUE top */ `json:"input,omitempty"`
+
+	Outputs []string `json:"outputs,omitempty"`
+
+	Redo RedoSpec `json:"redo,omitempty"`
+
+	Media MediaSpec `json:"media,omitempty"`
+}
+
+type AdeInput struct {
+	Bed string `json:"bed"`
+
+	Fail_on []string `json:"fail_on,omitempty"`
+
+	Redo RedoSpec `json:"redo,omitempty"`
+}
+
+type GenerateInput struct {
+	Template string `json:"template"`
+
+	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
+
+	Out string `json:"out"`
+
+	Validate string `json:"validate,omitempty"`
+
+	Negate_checks bool `json:"negate_checks,omitempty"`
+
+	Report ReportSpec `json:"report,omitempty"`
+}
+
+type EmitInput struct {
+	Schema string `json:"schema"`
+
+	Value map[string]any/* CUE top */ `json:"value"`
+
+	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
+
+	Out string `json:"out"`
+
+	Format string `json:"format,omitempty"`
+
+	Validate string `json:"validate,omitempty"`
+
+	Report ReportSpec `json:"report,omitempty"`
+}
+
+// #MediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
+type MediaInput struct {
+	Assemble bool `json:"assemble"`
+
+	Transcode string `json:"transcode,omitempty"`
+
+	Dir string `json:"dir,omitempty"`
+
+	Files []string `json:"files,omitempty"`
+
+	Media MediaSpec `json:"media,omitempty"`
+}
+
+type GateInput struct {
+	Condition string `json:"condition"`
+}

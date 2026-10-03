@@ -288,3 +288,74 @@
 #LLMNamedToolChoice: close({
 	function: close({name: string})
 })
+
+// ── Per-verb input shapes (the staged-verb cutover contract) ────────────────
+//
+// These are the per-verb input shapes for the six stage verbs (agent, probe,
+// ade, generate, emit, media) plus the deterministic gate. They are declared
+// NOW — before the verbs are lifted out of the pipeline executor into ordinary
+// `verb:` providers — so the lifted providers AND the migrator's frozen key
+// spellings have a SINGLE source to agree on. #MediaInput.assemble is retained
+// as a REQUIRED field even though no Go reader consults it: the retired grammar
+// declared it, and a field the old grammar accepted is never silently dropped.
+//
+// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
+// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+#AgentInput: {
+	prompt:     string                  @go(Prompt)
+	skill?:     [...string]             @go(Skill)
+	tools?:     [...string]             @go(Tools)
+	outputs?:   {[string]: #OutputType} @go(Outputs)
+	max_turns?: int & >0                @go(Max_turns)
+	llm?:       #LLMSpec                @go(Llm)
+	redo?:      #RedoSpec               @go(Redo)
+	cache?:     #CacheSpec              @go(Cache)
+	repo?:      string                  @go(Repo)
+	skills?:    {corpus: string}        @go(Skills)
+}
+
+#ProbeInput: {
+	verbs:    [string, ...string] @go(Verbs)
+	input?:   {[string]: _}       @go(Input)
+	outputs?: [...string]         @go(Outputs)
+	redo?:    #RedoSpec           @go(Redo)
+	media?:   #MediaSpec          @go(Media)
+}
+
+#AdeInput: {
+	bed:      string      @go(Bed)
+	fail_on?: [...string] @go(Fail_on)
+	redo?:    #RedoSpec   @go(Redo)
+}
+
+#GenerateInput: {
+	template:      string       @go(Template)
+	vars?:         {[string]: _} @go(Vars)
+	out:           string       @go(Out)
+	validate?:     string       @go(Validate)
+	negate_checks?: bool        @go(Negate_checks)
+	report?:       #ReportSpec  @go(Report)
+}
+
+#EmitInput: {
+	schema:   string           @go(Schema)
+	value:    {[string]: _}    @go(Value)
+	vars?:    {[string]: _}    @go(Vars)
+	out:      string           @go(Out)
+	format?:  "yaml" | "json"  @go(Format)
+	validate?: string          @go(Validate)
+	report?:  #ReportSpec      @go(Report)
+}
+
+// #MediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
+#MediaInput: {
+	assemble:   bool        @go(Assemble)
+	transcode?: string      @go(Transcode)
+	dir?:       string      @go(Dir)
+	files?:     [...string] @go(Files)
+	media?:     #MediaSpec  @go(Media)
+}
+
+#GateInput: {
+	condition: string @go(Condition)
+}
