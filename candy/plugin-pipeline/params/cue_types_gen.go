@@ -560,13 +560,29 @@ type LLMNamedToolChoice struct {
 // ade, generate, emit, media) plus the deterministic gate. They are declared
 // NOW — before the verbs are lifted out of the pipeline executor into ordinary
 // `verb:` providers — so the lifted providers AND the migrator's frozen key
-// spellings have a SINGLE source to agree on. #MediaInput.assemble is retained
-// as a REQUIRED field even though no Go reader consults it: the retired grammar
-// declared it, and a field the old grammar accepted is never silently dropped.
+// spellings have a SINGLE source to agree on. #PipelineMediaInput.assemble is
+// retained as a REQUIRED field even though no Go reader consults it: the retired
+// grammar declared it, and a field the old grammar accepted is never silently
+// dropped.
+//
+// WHY EVERY DEF HERE CARRIES THE `#Pipeline` PREFIX. The host splices EVERY
+// loaded plugin's served schema into ONE CUE instance (the loader appends each
+// served schema to the same value), and CUE UNIFIES two same-named defs instead
+// of erroring — so a plugin's def names share ONE GLOBAL namespace with every
+// OTHER plugin's. The load gate's splice detects a collision with the BASE only;
+// it does NOT detect plugin-vs-plugin. An un-prefixed `#AgentInput` here was
+// exactly that collision, and a silent one: plugin-agent is a RELEASED plugin
+// declaring `{Class: "kind", Word: "agent", InputDef: "#AgentInput"}` with an
+// incompatible shape (`command: [string, ...string]` + `prompt_via`), so the two
+// would have unified and rejected EVERY `agent: {prompt: …}` step with no error
+// at this seam. The prefix makes this plugin's seven defs collision-free by
+// construction. The loader-side class fix (namespace, or reject a plugin-vs-plugin
+// collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
+// added here takes the same prefix.
 //
 // Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
 // #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
-type AgentInput struct {
+type PipelineAgentInput struct {
 	Prompt string `json:"prompt"`
 
 	Skill []string `json:"skill,omitempty"`
@@ -590,7 +606,7 @@ type AgentInput struct {
 	} `json:"skills,omitempty"`
 }
 
-type ProbeInput struct {
+type PipelineProbeInput struct {
 	Verbs []string `json:"verbs"`
 
 	Input map[string]any/* CUE top */ `json:"input,omitempty"`
@@ -602,7 +618,7 @@ type ProbeInput struct {
 	Media MediaSpec `json:"media,omitempty"`
 }
 
-type AdeInput struct {
+type PipelineAdeInput struct {
 	Bed string `json:"bed"`
 
 	Fail_on []string `json:"fail_on,omitempty"`
@@ -610,7 +626,7 @@ type AdeInput struct {
 	Redo RedoSpec `json:"redo,omitempty"`
 }
 
-type GenerateInput struct {
+type PipelineGenerateInput struct {
 	Template string `json:"template"`
 
 	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
@@ -624,7 +640,7 @@ type GenerateInput struct {
 	Report ReportSpec `json:"report,omitempty"`
 }
 
-type EmitInput struct {
+type PipelineEmitInput struct {
 	Schema string `json:"schema"`
 
 	Value map[string]any/* CUE top */ `json:"value"`
@@ -640,8 +656,8 @@ type EmitInput struct {
 	Report ReportSpec `json:"report,omitempty"`
 }
 
-// #MediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
-type MediaInput struct {
+// #PipelineMediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
+type PipelineMediaInput struct {
 	Assemble bool `json:"assemble"`
 
 	Transcode string `json:"transcode,omitempty"`
@@ -653,6 +669,6 @@ type MediaInput struct {
 	Media MediaSpec `json:"media,omitempty"`
 }
 
-type GateInput struct {
+type PipelineGateInput struct {
 	Condition string `json:"condition"`
 }

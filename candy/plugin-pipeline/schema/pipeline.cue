@@ -295,13 +295,29 @@
 // ade, generate, emit, media) plus the deterministic gate. They are declared
 // NOW — before the verbs are lifted out of the pipeline executor into ordinary
 // `verb:` providers — so the lifted providers AND the migrator's frozen key
-// spellings have a SINGLE source to agree on. #MediaInput.assemble is retained
-// as a REQUIRED field even though no Go reader consults it: the retired grammar
-// declared it, and a field the old grammar accepted is never silently dropped.
+// spellings have a SINGLE source to agree on. #PipelineMediaInput.assemble is
+// retained as a REQUIRED field even though no Go reader consults it: the retired
+// grammar declared it, and a field the old grammar accepted is never silently
+// dropped.
+//
+// WHY EVERY DEF HERE CARRIES THE `#Pipeline` PREFIX. The host splices EVERY
+// loaded plugin's served schema into ONE CUE instance (the loader appends each
+// served schema to the same value), and CUE UNIFIES two same-named defs instead
+// of erroring — so a plugin's def names share ONE GLOBAL namespace with every
+// OTHER plugin's. The load gate's splice detects a collision with the BASE only;
+// it does NOT detect plugin-vs-plugin. An un-prefixed `#AgentInput` here was
+// exactly that collision, and a silent one: plugin-agent is a RELEASED plugin
+// declaring `{Class: "kind", Word: "agent", InputDef: "#AgentInput"}` with an
+// incompatible shape (`command: [string, ...string]` + `prompt_via`), so the two
+// would have unified and rejected EVERY `agent: {prompt: …}` step with no error
+// at this seam. The prefix makes this plugin's seven defs collision-free by
+// construction. The loader-side class fix (namespace, or reject a plugin-vs-plugin
+// collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
+// added here takes the same prefix.
 //
 // Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
 // #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
-#AgentInput: {
+#PipelineAgentInput: {
 	prompt:     string                  @go(Prompt)
 	skill?:     [...string]             @go(Skill)
 	tools?:     [...string]             @go(Tools)
@@ -314,7 +330,7 @@
 	skills?:    {corpus: string}        @go(Skills)
 }
 
-#ProbeInput: {
+#PipelineProbeInput: {
 	verbs:    [string, ...string] @go(Verbs)
 	input?:   {[string]: _}       @go(Input)
 	outputs?: [...string]         @go(Outputs)
@@ -322,13 +338,13 @@
 	media?:   #MediaSpec          @go(Media)
 }
 
-#AdeInput: {
+#PipelineAdeInput: {
 	bed:      string      @go(Bed)
 	fail_on?: [...string] @go(Fail_on)
 	redo?:    #RedoSpec   @go(Redo)
 }
 
-#GenerateInput: {
+#PipelineGenerateInput: {
 	template:      string       @go(Template)
 	vars?:         {[string]: _} @go(Vars)
 	out:           string       @go(Out)
@@ -337,7 +353,7 @@
 	report?:       #ReportSpec  @go(Report)
 }
 
-#EmitInput: {
+#PipelineEmitInput: {
 	schema:   string           @go(Schema)
 	value:    {[string]: _}    @go(Value)
 	vars?:    {[string]: _}    @go(Vars)
@@ -347,8 +363,8 @@
 	report?:  #ReportSpec      @go(Report)
 }
 
-// #MediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
-#MediaInput: {
+// #PipelineMediaInput — dir/files are declared here because the Go reader consults them although the retired #MediaStage did not declare them.
+#PipelineMediaInput: {
 	assemble:   bool        @go(Assemble)
 	transcode?: string      @go(Transcode)
 	dir?:       string      @go(Dir)
@@ -356,6 +372,6 @@
 	media?:     #MediaSpec  @go(Media)
 }
 
-#GateInput: {
+#PipelineGateInput: {
 	condition: string @go(Condition)
 }
