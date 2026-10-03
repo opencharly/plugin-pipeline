@@ -16,7 +16,7 @@ import (
 
 // runCLI: the command:pipeline surface (OpRun args).
 //
-//	pipeline run <entity> [--dry-run]
+//	pipeline run <entity> [--dry-run] [--args-json <json-object>] [--mode human|tool]
 //	pipeline validate <entity>
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
@@ -27,6 +27,11 @@ import (
 // dispatches the pair to the `workflow` provider class as OpWorkflowRun. The
 // engine (plugin-lobster today) owns execution; this command never runs a step
 // itself. `--dry-run` stops after the lowering (validate + lower, no dispatch).
+//
+// The run leg's dispatch inputs — `--args-json` (the pipeline's declared args) and
+// `--mode human|tool` — are parsed and validated up front, so a malformed flag is a
+// named error in EVERY mode instead of being silently accepted by the path that does
+// not consume it. Both are documented on workflowRunParams.
 func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	mode := ""
 	var rest []string
@@ -65,6 +70,10 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		}
 		name := rest[0]
 		genDir := filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+		params, perr := workflowRunParams(name, genDir, rest)
+		if perr != nil {
+			return 1, perr
+		}
 		if err := os.MkdirAll(genDir, 0o755); err != nil {
 			return 1, err
 		}
@@ -90,11 +99,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		if ex == nil {
 			return 1, fmt.Errorf("pipeline run %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowRun)
 		}
-		req, merr := json.Marshal(spec.WorkflowRunRequest{Pipeline: name, GenDir: genDir})
-		if merr != nil {
-			return 1, merr
-		}
-		if _, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, req, nil, ops.InvokeProviderOpts{}); ierr != nil {
+		if _, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, params, nil, ops.InvokeProviderOpts{}); ierr != nil {
 			return 1, fmt.Errorf("pipeline run %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowRun, ierr)
 		}
 		fmt.Printf("pipeline %s: ran via workflow:%s\n", name, engine)
@@ -169,4 +174,53 @@ func flagAfter(args []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// workflowRunParams builds the OpWorkflowRun envelope the front-end dispatches to the
+// `workflow` provider class: the EXACT ParamsJson bytes the engine receives (one
+// builder, so the CLI cannot drift from the envelope it documents).
+//
+// The run leg carries TWO dispatch inputs, both consumed by the engine:
+//
+//   - `--args-json <json-object>` → WorkflowRunRequest.Args, an object of STRING
+//     values (the envelope field is typed `map[string]string`, not `any`). The
+//     lowering emits `-p NAME="$NAME"` for every declared arg, so an arg the
+//     front-end never passes reaches the engine as an EMPTY value; a malformed
+//     document or a non-string member is therefore a NAMED error here, never a
+//     silently-empty arg.
+//   - `--mode human|tool` → WorkflowRunRequest.Mode, which selects the engine's
+//     human/tool envelope. ABSENT leaves Mode empty ON PURPOSE: the engine owns its
+//     default, and a front-end default would silently override it.
+func workflowRunParams(name, genDir string, rest []string) ([]byte, error) {
+	args, mode, err := runDispatchFlags(name, rest)
+	if err != nil {
+		return nil, err
+	}
+	params, merr := json.Marshal(spec.WorkflowRunRequest{Pipeline: name, Args: args, Mode: mode, GenDir: genDir})
+	if merr != nil {
+		return nil, fmt.Errorf("pipeline run %s: encode request: %w", name, merr)
+	}
+	return params, nil
+}
+
+// runDispatchFlags parses and validates the run leg's dispatch flags out of rest.
+func runDispatchFlags(name string, rest []string) (map[string]string, string, error) {
+	var args map[string]string
+	if has(rest, "--args-json") {
+		raw := flagAfter(rest, "--args-json")
+		if uerr := json.Unmarshal([]byte(raw), &args); uerr != nil {
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: %v (want a JSON object of STRING values, e.g. '{\"who\":\"world\"}')", name, uerr)
+		}
+		if args == nil {
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: want a JSON object of STRING values, e.g. '{\"who\":\"world\"}' (got %q)", name, raw)
+		}
+	}
+	mode := ""
+	if has(rest, "--mode") {
+		mode = flagAfter(rest, "--mode")
+		if mode != "human" && mode != "tool" {
+			return nil, "", fmt.Errorf("pipeline run %s: --mode %q: accepted values are human, tool", name, mode)
+		}
+	}
+	return args, mode, nil
 }

@@ -25,7 +25,11 @@ lifted stage verbs.
   `sdk/workflowkit.Lower` to `workflow.lobster` + a generated `charly.yml`, and
   dispatch the pair to the `workflow` provider class as `workflow-run`. The
   ENGINE owns execution, control flow, redo, and iteration. `--dry-run` validates
-  and lowers without dispatching. The reference grammar (`$pr` / `$calver` /
+  and lowers without dispatching. The two dispatch inputs travel on the request:
+  `--args-json <json-object>` carries the pipeline's declared args as an object of
+  string values (a malformed value is a named error, never a silently-empty arg),
+  and `--mode human|tool` selects the engine's envelope (absent leaves the engine's
+  own default in place). The reference grammar (`$pr` / `$calver` /
   `$workdir` / `$env.NAME`) is resolved by the engine and by each verb body's
   template.
 - **`charly pipeline agent`** — the bare runtime: direct chat-completions with a

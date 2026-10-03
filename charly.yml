@@ -40,6 +40,10 @@ check-pipeline-app:
 #   - the generated charly.yml is inspected for the authored verb sugar — the regression
 #     this bed exists for is a plan step lowering to an EMPTY step (`- {}`) because the
 #     resolver skipped the loader's sugar desugar;
+#   - the run leg's TWO dispatch inputs are witnessed in both directions: a well-formed
+#     `--args-json`/`--mode` pair is accepted, while a malformed `--args-json` and an
+#     unsupported `--mode` are NAMED errors (the lowering emits `-p NAME="$NAME"` for
+#     every declared arg, so a dropped arg reaches the engine as an EMPTY value);
 #   - the last step runs the whole pipeline through the engine.
 #
 # UNRUN: authored, not yet executed on a host (its `${CHARLY_BIN}` needs a charly built
@@ -172,6 +176,72 @@ check-pipeline-local:
                   grep -q -- '- {}$' "$g" && rc=1
                   grep -q 'import:' "$g" || rc=1
                   rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a malformed --args-json is a NAMED error (never a silently-empty arg — the lowering emits -p NAME="$NAME" for every declared arg)
+              id: pipeline-run-rejects-malformed-args
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: '--args-json'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"n":3}' --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: an unsupported --mode is a NAMED error naming BOTH accepted values
+              id: pipeline-run-rejects-bad-mode
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: 'accepted values are human, tool'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --mode banana --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a well-formed --args-json/--mode pair is ACCEPTED and the lowering still stops before dispatch
+              id: pipeline-run-accepts-dispatch-flags
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'dry-run OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"who":"world"}' --mode tool --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
                 in_container: false
             - check: the whole pipeline runs through the workflow engine, so the builtin-verb plan step actually executes (dispatched as workflow-run to the `workflow` provider class)
               id: pipeline-runs-builtin-verb-step
