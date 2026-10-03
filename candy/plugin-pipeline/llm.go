@@ -50,7 +50,7 @@ type (
 //
 // An empty RESOLVED api_key means ABSENT: no Authorization header is sent, so a
 // missing secret can never zero out a lane — and the local ollama needs none.
-func resolveLLM(rc *runCtx, stage *params.StageLLMSpec) (llmkit.Config, error) {
+func resolveLLM(rc *verbEnv, stage *params.LLMSpec) (llmkit.Config, error) {
 	cfg := llmkit.Default()
 	if rc != nil {
 		// layer 3 — the entity's authored llm: block
@@ -71,7 +71,7 @@ func resolveLLM(rc *runCtx, stage *params.StageLLMSpec) (llmkit.Config, error) {
 }
 
 // toSpecLLM bridges a generated plugin llm value (the entity's params.LLMSpec or
-// a stage's params.StageLLMSpec) onto the contract spec.LLMSpec the shared client
+// a stage's params.LLMSpec) onto the contract spec.LLMSpec the shared client
 // consumes. The two shapes are the same CUE vocabulary, so the JSON round-trip is
 // exact; ONE helper serves both callers (R3 — the value/pointer difference is the
 // caller's, not a reason for a second copy).
@@ -92,7 +92,7 @@ func toSpecLLM(v any) (spec.LLMSpec, error) {
 }
 
 // chat issues ONE streaming completion through the shared client.
-func chat(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, msgs []chatMsg, tools []openai.ChatCompletionToolUnionParam) (chatMsg, error) {
+func chat(ctx context.Context, rc *verbEnv, stage *params.LLMSpec, msgs []chatMsg, tools []openai.ChatCompletionToolUnionParam) (chatMsg, error) {
 	cfg, err := resolveLLM(rc, stage)
 	if err != nil {
 		return chatMsg{}, err
@@ -107,7 +107,7 @@ func chat(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, msgs []ch
 }
 
 // chatVision sends one multimodal completion through the shared client.
-func chatVision(ctx context.Context, rc *runCtx, stage *params.StageLLMSpec, prompt string, images []string) (string, error) {
+func chatVision(ctx context.Context, rc *verbEnv, stage *params.LLMSpec, prompt string, images []string) (string, error) {
 	cfg, err := resolveLLM(rc, stage)
 	if err != nil {
 		return "", err
@@ -169,7 +169,7 @@ func intValue(v any) int {
 // stageLLM decodes the stage's authored `llm` override from the raw stage map
 // (the CUE-validated form) into its generated type. An absent block is nil —
 // resolveLLM then simply has no stage layer.
-func stageLLM(raw map[string]any) *params.StageLLMSpec {
+func stageLLM(raw map[string]any) *params.LLMSpec {
 	if raw == nil {
 		return nil
 	}
@@ -181,7 +181,7 @@ func stageLLM(raw map[string]any) *params.StageLLMSpec {
 	if err != nil {
 		return nil
 	}
-	var out params.StageLLMSpec
+	var out params.LLMSpec
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil
 	}

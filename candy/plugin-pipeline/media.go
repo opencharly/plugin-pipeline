@@ -24,7 +24,7 @@ var calverRe = regexp.MustCompile("[0-9]{3,}") // extract calver from a run dir 
 // the raw["dir"] branch, so the default was CWD-relative; the workdir is the
 // project root (the lane runs with workdir == the eval-omarchy checkout), so
 // this makes the default land in the repo as intended.
-func (rc *runCtx) mediaDir(raw map[string]any, pr, calver string) string {
+func (rc *verbEnv) mediaDir(raw map[string]any, pr, calver string) string {
 	dir := "media/pr-" + pr + "-" + calver
 	switch {
 	case s(raw["dir"]) != "":

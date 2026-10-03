@@ -1,14 +1,16 @@
 plugin-pipeline:
     candy:
         description: |-
-            The generic agent/workflow engine — domain-neutral: the bare agent
-            runtime (plan agent stage + the standalone 'charly pipeline agent'),
-            the plan executor ('charly pipeline run <entity>'), deterministic
-            probe verbs, template/frontmatter rendering, redo + fail-hard,
-            skills by @github candy refs. Every pipeline is a declared plan
-            (kind:pipeline entity, SDD CUE-first). Every stage kind is ALSO a
-            reachable verb (verb:agent/probe/ade/generate/emit/media/gate), so a
-            stage body can be driven as a `<word>: <input>` step from any plan.
+            The workflow front-end — domain-neutral: resolve + validate a declared
+            kind:pipeline entity (spec.Pipeline, `steps:`), lower it with
+            sdk/workflowkit to the (workflow.lobster, charly.yml) pair, and dispatch
+            the pair to the `workflow` provider class as workflow-run. Also the bare
+            agent runtime (the standalone 'charly pipeline agent'), deterministic
+            probe verbs, template/frontmatter rendering, and skills by @github candy
+            refs. Every stage kind is ALSO a reachable verb
+            (verb:agent/probe/ade/generate/emit/media/gate), so a stage body can be
+            driven as a `<word>: <input>` step from any plan. Execution/control flow
+            belongs to the `workflow` ENGINE, not this plugin.
         plugin:
             providers:
                 - command:pipeline
@@ -28,10 +30,10 @@ plugin-pipeline:
               context:
                 - build
               command: "grep -q '^pipeline-skill:' charly.yml"
-            - check: the pipeline module ships (go.mod + the executor + generated params)
+            - check: the pipeline module ships (go.mod + the front-end + generated params)
               id: plugin-pipeline-module-present
               context: [build]
-              command: "test -f go.mod && test -f executor.go && test -f params/cue_types_gen.go"
+              command: "test -f go.mod && test -f cli.go && test -f refs.go && test -f params/cue_types_gen.go"
 
 pipeline-skill:
     skill:
@@ -39,27 +41,34 @@ pipeline-skill:
         family: pipeline
         owner: plugin-pipeline
         description: |-
-            The `charly pipeline` agent/workflow engine — run a declared plan, the bare agent
-            runtime, deterministic probe verbs, template rendering. Use for kind:pipeline entities.
+            The `charly pipeline` workflow front-end — resolve/validate/lower a declared
+            kind:pipeline entity and dispatch it to the workflow engine, the bare agent
+            runtime, deterministic probe verbs, template rendering.
         triggers:
             - "`charly pipeline` / agent workflow engine / kind:pipeline / pipeline run"
         content: |
-            # charly pipeline — the generic agent/workflow engine
+            # charly pipeline — the workflow front-end
 
-            `charly pipeline` is the domain-neutral agent/workflow engine. Served by
+            `charly pipeline` is the domain-neutral workflow front-end. Served by
             `candy/plugin-pipeline` (`command:pipeline`, out-of-process over gRPC).
 
             ## What it provides
 
-            - the bare agent runtime (the plan agent stage + the standalone `charly pipeline agent`);
-            - the plan executor — `charly pipeline run <entity>`;
+            - the bare agent runtime (the standalone `charly pipeline agent`);
+            - the run leg — `charly pipeline run <entity>`: resolve the authored
+              `kind: pipeline` entity, validate it with `sdk/workflowkit.ValidatePipeline`,
+              lower it with `sdk/workflowkit.Lower` to `workflow.lobster` + a generated
+              `charly.yml`, and dispatch the pair to the `workflow` provider class as
+              `workflow-run` (the workflow ENGINE owns execution, control flow, redo, and
+              iteration);
             - deterministic probe verbs;
             - template/frontmatter rendering;
-            - redo + fail-hard semantics;
+            - the seven stage kinds as ordinary reachable verbs
+              (`verb:agent/probe/ade/generate/emit/media/gate`);
             - skills by `@github` candy refs.
 
-            Every pipeline is a DECLARED plan (`kind:pipeline` entity, SDD CUE-first), so the
-            engine is config-driven rather than code-driven.
+            Every workflow is a DECLARED pipeline (`kind:pipeline` entity: `spec.Pipeline`
+            with `steps:`), so the engine is config-driven rather than code-driven.
 
             ## When to use it
 

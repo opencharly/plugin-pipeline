@@ -26,7 +26,7 @@ var validTransforms = map[string]bool{"negate": true, "json": true, "yaml": true
 // workdir (the SAME contract for both the `generate` and `emit` stage kinds —
 // one implementation, R3). Non-zero exit fails the stage: the artifact never
 // ships unvalidated.
-func runAuthoredValidator(rc *runCtx, v string) error {
+func runAuthoredValidator(rc *verbEnv, v string) error {
 	cmd := rc.resolveRefs(v)
 	c := exec.Command("bash", "-c", cmd)
 	c.Dir = rc.workdir

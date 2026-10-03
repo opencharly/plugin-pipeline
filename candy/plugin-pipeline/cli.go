@@ -2,20 +2,31 @@ package pluginpipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/opencharly/sdk"
+	"github.com/opencharly/sdk/workflowkit"
+	"github.com/opencharly/spec/ops"
+	"github.com/opencharly/spec/spec"
 )
 
 // runCLI: the command:pipeline surface (OpRun args).
 //
-//	pipeline run <entity> [--pr N] [--calver X] [--workdir DIR]
+//	pipeline run <entity> [--dry-run]
 //	pipeline validate <entity>
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
 //	pipeline --self-test
+//
+// `run` is the FRONT-END leg: it resolves the entity, validates it with
+// sdk/workflowkit, lowers it to the (workflow.lobster, charly.yml) pair, and
+// dispatches the pair to the `workflow` provider class as OpWorkflowRun. The
+// engine (plugin-lobster today) owns execution; this command never runs a step
+// itself. `--dry-run` stops after the lowering (validate + lower, no dispatch).
 func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	mode := ""
 	var rest []string
@@ -30,7 +41,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	switch mode {
 	case "":
 		if has(args, "--self-test") {
-			fmt.Println("pipeline self-test: ok (executor + agent runtime present)")
+			fmt.Println("pipeline self-test: ok (workflow front-end + agent runtime present)")
 			return 0, nil
 		}
 		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe")
@@ -42,44 +53,52 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		fmt.Printf("pipeline %s: valid (%d stages)\n", rest[0], len(p.Stages))
+		fmt.Printf("pipeline %s: valid (%d steps)\n", rest[0], len(p.Steps))
 		return 0, nil
 	case "run":
-		// --dry-run (plan row 8): validate the entity + resolve every declared
-		// env ref, then stop without executing.
-		if flagAfter(rest, "--dry-run") != "" || has(rest, "--dry-run") {
-			p, derr := loadEntity(rest[0])
-			if derr != nil {
-				return 1, derr
-			}
-			env := envMap()
-			missing := []string{}
-			for _, k := range envRefs(p) {
-				if _, ok := env[k]; !ok {
-					missing = append(missing, k)
-				}
-			}
-			if len(missing) > 0 {
-				return 1, fmt.Errorf("pipeline dry-run: unresolvable env refs: %v", missing)
-			}
-			fmt.Println("pipeline", rest[0], "dry-run OK, env refs:", len(envRefs(p)), "stages:", len(p.Stages))
-			return 0, nil
-		}
-
 		if len(rest) == 0 {
-			return 2, fmt.Errorf("pipeline run <entity> [--pr N] [--prs a b c]")
+			return 2, fmt.Errorf("pipeline run <entity>")
 		}
 		p, err := loadEntity(rest[0])
 		if err != nil {
 			return 1, err
 		}
-		calver := flagAfter(rest, "--calver")
-		workdir := flagAfter(rest, "--workdir")
-		// the charly-native BATCH: --prs a b c runs the SAME entity per PR,
-		// sequencing-gated + venue-cleaned between lanes (the check stage's
-		// teardown handles the VMs; the sequencing gate blocks while a batch
-		// VM lives) — no external loop scripts.
-		return runBatch(rest, p, calver, workdir, ex)
+		name := rest[0]
+		genDir := filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+		if err := os.MkdirAll(genDir, 0o755); err != nil {
+			return 1, err
+		}
+		lobsterYAML, charlyYAML, lerr := workflowkit.Lower(&p, projectDir(), genDir, charlyBin())
+		if lerr != nil {
+			return 1, lerr
+		}
+		if werr := os.WriteFile(filepath.Join(genDir, "workflow.lobster"), lobsterYAML, 0o644); werr != nil {
+			return 1, werr
+		}
+		if werr := os.WriteFile(filepath.Join(genDir, "charly.yml"), charlyYAML, 0o644); werr != nil {
+			return 1, werr
+		}
+		if has(rest, "--dry-run") {
+			fmt.Printf("pipeline %s: dry-run OK — lowered %d steps to %s (workflow.lobster + charly.yml written, not dispatched)\n",
+				name, len(p.Steps), genDir)
+			return 0, nil
+		}
+		engine := p.Engine
+		if engine == "" {
+			engine = "lobster"
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline run %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowRun)
+		}
+		req, merr := json.Marshal(spec.WorkflowRunRequest{Pipeline: name, GenDir: genDir})
+		if merr != nil {
+			return 1, merr
+		}
+		if _, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, req, nil, ops.InvokeProviderOpts{}); ierr != nil {
+			return 1, fmt.Errorf("pipeline run %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowRun, ierr)
+		}
+		fmt.Printf("pipeline %s: ran via workflow:%s\n", name, engine)
+		return 0, nil
 	case "agent":
 		sys := flagAfter(rest, "--system-prompt")
 		prompt := flagAfter(rest, "--prompt")
@@ -112,6 +131,16 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	return 2, fmt.Errorf("pipeline: unknown mode %q", mode)
 }
 
+// charlyBin is the binary path the lowering bakes into every generated `run:`
+// (the engine drives generated charly tasks with `<charlyBin> -C <gen-dir> task
+// <entity>`). CHARLY_BIN overrides it; the default is the PATH-resolved charly.
+func charlyBin() string {
+	if b := os.Getenv("CHARLY_BIN"); b != "" {
+		return b
+	}
+	return "charly"
+}
+
 // CliMain: the OUT-OF-PROCESS CLI-mode entry (sdk.Main dual mode).
 func CliMain(args []string) int {
 	exit, err := runCLI(args, nil)
@@ -132,43 +161,6 @@ func has(args []string, f string) bool {
 	}
 	return false
 }
-
-// restAfter returns the args AFTER the named flag (for --prs a b c ...).
-func restAfter(args []string, name string) []string {
-	for i, a := range args {
-		if a == name {
-			out := []string{}
-			for _, x := range args[i+1:] {
-				if strings.HasPrefix(x, "--") {
-					break
-				}
-				out = append(out, x)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
-// REMOVED: teardownVenue / teardownLaneBeds (the batch-level venue teardown).
-//
-// Venue lifecycle has ONE owner: the `ade` stage itself. `charly check run` is
-// invoked with `--keep-venue` (the evidence is collected from the live domain),
-// and runAdeBed's deferred destroyVenue tears it down on every exit path,
-// including an abort (`context.WithoutCancel`). A SECOND owner was a defect of
-// exactly the kind R3 forbids:
-//
-//   - it hardcoded the eval-omarchy golden entity and a
-//     `check-omarchy-pr-<pr>-vm`/`-vm-probe` domain scheme in the domain-neutral
-//     engine (the `-vm-probe` suffix matched no entity at all);
-//   - it resolved the bed refs against the PROCESS env (`envMap()`), not the
-//     lane's run context — the same per-lane-env break this change fixes in
-//     ade.go, so any `$env.*` bed ref resolved to the operator's value or
-//     empty and the destroy silently targeted the wrong name;
-//   - it used the signal-cancelled ctx, so it was skipped precisely in the
-//     abort scenario teardown exists for.
-//
-// The `ade` stage owns the venue; the batch does not duplicate the rule.
 
 func flagAfter(args []string, name string) string {
 	for i, a := range args {

@@ -1,3 +1,203 @@
+# Makes this plugin repo a PROJECT so its own candy is actually gated: without a root
+# charly.yml the repo is "project-less", charly scans NO candies, and `charly box
+# validate` exits 0 on any manifest (opencharly/charly#459). This file also declares the
+# R10 witness bed (below).
 discover:
     - path: candy
       recursive: true
+
+# check-pipeline-app — the bed's local template. It composes this repo's own candy (the
+# front-end under test) plus the TASK engine that executes the tasks the lowering
+# generates (`charly -C <gen-dir> task <entity>`), pinned to the released plugin-task.
+#
+# The WORKFLOW engine (plugin-lobster) is NOT composed here: it carries no release tag
+# yet, and a pinned `@github…/candy/plugin-lobster:<ref>` ref that does not resolve makes
+# the bed unbuildable rather than strict. It is the pin to ADD the moment plugin-lobster
+# tags — the `pipeline-runs-builtin-verb-step` step below is its witness, and the R10 gate
+# runs these steps host-side against the `${CHARLY_BIN}` it built with every wave plugin
+# compiled in, so the engine leg is present there regardless.
+check-pipeline-app:
+    local:
+        description: >-
+            Minimal kind:local template for the check-pipeline-local bed — composes the
+            workflow front-end candy (candy/plugin-pipeline) under test plus the released
+            plugin-task, so the bed exercises `charly pipeline` host-side.
+        candy:
+            - plugin-pipeline
+            - '@github.com/opencharly/plugin-task/candy/plugin-task:v2026.276.1230'
+
+# check-pipeline-local — the R10 witness for the front-end: the hard cutover from the
+# retired home-grown pipeline grammar (a stage list / #*Stage / the in-process executor) to
+# the wave design — the authored entity is `spec.Pipeline` (`steps:`), validated by
+# sdk/workflowkit.ValidatePipeline, lowered by sdk/workflowkit.Lower to the
+# (workflow.lobster, charly.yml) pair, and dispatched to the `workflow` provider class as
+# workflow-run. Every step runs `${CHARLY_BIN}` host-side in a mktemp project, so the
+# front-end's OWN resolution/validation/lowering is what is being graded:
+#
+#   - the mixed-grammar fixture exercises all three authored grammars at once (a lobster
+#     shell arm, a flow key, and the loader's single-step `<word>: <input>` verb sugar);
+#   - the broken fixture proves the exec-arm XOR is NAMED, never a silent pass;
+#   - the generated charly.yml is inspected for the authored verb sugar — the regression
+#     this bed exists for is a plan step lowering to an EMPTY step (`- {}`) because the
+#     resolver skipped the loader's sugar desugar;
+#   - the last step runs the whole pipeline through the engine.
+#
+# UNRUN: authored, not yet executed on a host (its `${CHARLY_BIN}` needs a charly built
+# from the post-opencharly/charly#754 tree — the retired `version:` stamp — and the
+# workflow engine pin above).
+check-pipeline-local:
+    local:
+        from: check-pipeline-app
+        host: local
+        disposable: true
+        lifecycle: dev
+        description: >-
+            The workflow front-end's R10 witness: `charly pipeline validate|run` resolves,
+            validates and lowers an authored `kind:pipeline` (spec.Pipeline, `steps:`) and
+            dispatches the lowered pair to the workflow engine — the hard cutover off the
+            retired stage-list/#*Stage in-process executor, proven on a disposable local deploy.
+        plan:
+            - check: a mixed-grammar pipeline (lobster shell arm + flow key + single-step verb sugar) validates through the shared workflowkit gate
+              id: pipeline-validate-mixed-grammar
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'mixed-plan: valid (2 steps)'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          when: $build.exit_code == 0
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate mixed-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a step carrying two execution arms is rejected with the NAMED exec-arm error, never a silent pass
+              id: pipeline-validate-rejects-two-arms
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: 'execution arms set'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  broken-plan:
+                    pipeline:
+                      description: two execution arms on one step
+                      steps:
+                        - id: s
+                          run: "true"
+                          pipeline: other
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate broken-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the lowering writes BOTH halves of the pair — workflow.lobster and the generated charly.yml — under .opencharly/pipelines/<entity>
+              id: pipeline-lower-writes-pair
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'dry-run OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
+                  rc=$?
+                  g="$d/.opencharly/pipelines/mixed-plan"
+                  test -s "$g/workflow.lobster" || rc=1
+                  test -s "$g/charly.yml" || rc=1
+                  grep -q 'name: mixed-plan' "$g/workflow.lobster" || rc=1
+                  grep -q 'task _pipeline-mixed-plan-verify' "$g/workflow.lobster" || rc=1
+                  rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the builtin-verb plan step lowers to a generated charly task carrying the AUTHORED verb sugar (not an empty step) and the generated file flat-imports the project charly.yml
+              id: pipeline-lowered-task-carries-verb-sugar
+              context:
+                - runtime
+              exit_status: 0
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
+                  rc=$?
+                  g="$d/.opencharly/pipelines/mixed-plan/charly.yml"
+                  grep -q '^_pipeline-mixed-plan-verify:' "$g" || rc=1
+                  grep -q 'run: grade the build result' "$g" || rc=1
+                  grep -q 'condition: "true"' "$g" || rc=1
+                  grep -q -- '- {}$' "$g" && rc=1
+                  grep -q 'import:' "$g" || rc=1
+                  rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the whole pipeline runs through the workflow engine, so the builtin-verb plan step actually executes (dispatched as workflow-run to the `workflow` provider class)
+              id: pipeline-runs-builtin-verb-step
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'ran via workflow:lobster'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          when: $build.exit_code == 0
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false

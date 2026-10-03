@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,16 +20,14 @@ func TestGeneratePerMarkerNegate(t *testing.T) {
 	checks := []any{
 		map[string]any{"id": "c1", "what": "the file exists", "assertion": "test -f /usr/share/omarchy/x"},
 	}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "bed-render", "kind": "generate",
 		"template": "plan:\n  ${checks}\ncontrol:\n  ${checks:negate}\n",
-		"vars":     map[string]any{"checks": "@triage.checks"},
+		"vars":     map[string]any{"checks": checks},
 		"out":      wd + "/beds.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"checks": checks}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "bed-render", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "beds.yml"))
@@ -51,16 +48,14 @@ func TestGeneratePerMarkerNegate(t *testing.T) {
 func TestGenerateMarkerJSON(t *testing.T) {
 	wd := t.TempDir()
 	checks := []any{map[string]any{"id": "c1", "what": "x", "assertion": "true", "knownRed": true}}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "record", "kind": "generate",
 		"template": "checks: ${checks:json}\n",
-		"vars":     map[string]any{"checks": "@triage.checks"},
+		"vars":     map[string]any{"checks": checks},
 		"out":      wd + "/eval.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"checks": checks}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "eval.yml"))
@@ -76,16 +71,14 @@ func TestGenerateMarkerJSON(t *testing.T) {
 func TestGeneratePerMarkerNegate_IndentPreserved(t *testing.T) {
 	wd := t.TempDir()
 	checks := []any{map[string]any{"id": "c1", "what": "w", "assertion": "test -f /x"}}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "g", "kind": "generate",
 		"template": "outer:\n  inner:\n    plan:\n      ${checks:negate}\n",
-		"vars":     map[string]any{"checks": "@triage.checks"},
+		"vars":     map[string]any{"checks": checks},
 		"out":      wd + "/o.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"checks": checks}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "g", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "o.yml"))
@@ -102,16 +95,14 @@ func TestGeneratePerMarkerNegate_IndentPreserved(t *testing.T) {
 func TestGenerateMarkerYAML(t *testing.T) {
 	wd := t.TempDir()
 	steps := []any{map[string]any{"id": "pr-apply", "name": "apply PR", "status": "ok"}}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "record", "kind": "generate",
 		"template": "eval_steps:\n  ${steps:yaml}\n",
-		"vars":     map[string]any{"steps": "@gate.eval_steps"},
+		"vars":     map[string]any{"steps": steps},
 		"out":      wd + "/record.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "gate", Kind: "probe", Status: "ok", Outputs: map[string]any{"eval_steps": steps}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "record.yml"))
@@ -137,16 +128,14 @@ func TestGenerateMarkerYAML(t *testing.T) {
 func TestGenerateMarkerIndent(t *testing.T) {
 	wd := t.TempDir()
 	body := "line one\nline two\n\nline four"
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "record", "kind": "generate",
 		"template": "report: |\n  ${body:indent}\n",
-		"vars":     map[string]any{"body": "@report.tests"},
+		"vars":     map[string]any{"body": body},
 		"out":      wd + "/record.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "report", Kind: "agent", Status: "ok", Outputs: map[string]any{"tests": body}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "record.yml"))
@@ -166,16 +155,14 @@ func TestGenerateMarkerIndent(t *testing.T) {
 func TestGenerateMarkerBullets(t *testing.T) {
 	wd := t.TempDir()
 	sugg := []any{"do X", "fix Y"}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "record", "kind": "generate",
 		"template": "report: |\n  ## Suggestions\n  ${s:bullets}\n",
-		"vars":     map[string]any{"s": "@cold.suggestions"},
+		"vars":     map[string]any{"s": sugg},
 		"out":      wd + "/record.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "cold", Kind: "agent", Status: "ok", Outputs: map[string]any{"suggestions": sugg}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "record", stage, l); err != nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "record.yml"))
@@ -196,16 +183,14 @@ func TestGenerateMarkerBullets(t *testing.T) {
 func TestGenerateUnknownTransformErrors(t *testing.T) {
 	wd := t.TempDir()
 	checks := []any{map[string]any{"id": "c1", "what": "w", "assertion": "test -f /x"}}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "g", "kind": "generate",
 		"template": "plan:\n  ${checks:negte}\n",
-		"vars":     map[string]any{"checks": "@triage.checks"},
+		"vars":     map[string]any{"checks": checks},
 		"out":      wd + "/o.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"checks": checks}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "g", stage, l); err == nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err == nil {
 		t.Fatal("an unknown marker transform must error, not render a silent no-op")
 	}
 }
@@ -213,16 +198,14 @@ func TestGenerateUnknownTransformErrors(t *testing.T) {
 // :negate on a non-list marker has no negation semantics — it must error.
 func TestGenerateNegateOnNonListErrors(t *testing.T) {
 	wd := t.TempDir()
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "g", "kind": "generate",
 		"template": "x: ${v:negate}\n",
-		"vars":     map[string]any{"v": "@triage.what"},
+		"vars":     map[string]any{"v": "a string"},
 		"out":      wd + "/o.yml",
 	}
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"what": "a string"}})
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "generate", "g", stage, l); err == nil {
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err == nil {
 		t.Fatal(":negate on a non-list must error")
 	}
 }
@@ -240,7 +223,7 @@ func TestAgentCacheHitSkipsAgent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wd, "eval.yml"), []byte(plan), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stage := params.Stage{
+	stage := map[string]any{
 		"id": "oracle", "kind": "agent", "prompt": "unused",
 		"outputs": map[string]any{
 			"class":   map[string]any{"type": "string"},
@@ -252,20 +235,19 @@ func TestAgentCacheHitSkipsAgent(t *testing.T) {
 	}
 	t.Setenv("EVAL_LLM_BASE_URL", "http://127.0.0.1:1") // a hit must never dial
 	t.Setenv("PR_HEAD_SHA", "abc123")
-	l := newLedger()
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}, ledger: l}
-	res, err := rc.runStage(nil, "agent", "oracle", stage, l)
-	if err != nil || res.Status != "ok" {
-		t.Fatalf("agent cache hit: %v %v", res, err)
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	res, err := runAgentStage(rc.ctxOf(), rc, stage)
+	if err != nil {
+		t.Fatalf("agent cache hit: %v", err)
 	}
-	if res.Outputs["cache_hit"] != true {
-		t.Fatalf("expected a cache hit, got %v", res.Outputs)
+	if res["cache_hit"] != true {
+		t.Fatalf("expected a cache hit, got %v", res)
 	}
-	if res.Outputs["golden"] != "check-omarchy-eval-edge-inst" {
-		t.Fatalf("the cached golden was not surfaced: %v", res.Outputs["golden"])
+	if res["golden"] != "check-omarchy-eval-edge-inst" {
+		t.Fatalf("the cached golden was not surfaced: %v", res["golden"])
 	}
-	if res.Outputs["checks"] == nil {
-		t.Fatalf("the cached checks were not surfaced: %v", res.Outputs)
+	if res["checks"] == nil {
+		t.Fatalf("the cached checks were not surfaced: %v", res)
 	}
 }
 
@@ -277,14 +259,14 @@ func TestAgentCacheMissOnNewHead(t *testing.T) {
 	}
 	// a miss: readAgentCache must report hit=false (the agent then runs, which
 	// this test does not exercise — it asserts the cache decision alone).
-	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "new111"}}
+	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "new111"}}
 	stage := map[string]any{"cache": map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"}}
 	_, hit, err := readAgentCache(rc, stage)
 	if err != nil || hit {
 		t.Fatalf("stale head must MISS: hit=%v err=%v", hit, err)
 	}
 	// and a missing file is a miss, not an error.
-	rc2 := &runCtx{pr: "8", workdir: t.TempDir(), env: map[string]string{"PR_HEAD_SHA": "x"}}
+	rc2 := &verbEnv{pr: "8", workdir: t.TempDir(), env: map[string]string{"PR_HEAD_SHA": "x"}}
 	_, hit2, err2 := readAgentCache(rc2, stage)
 	if err2 != nil || hit2 {
 		t.Fatalf("missing plan must MISS cleanly: hit=%v err=%v", hit2, err2)
@@ -306,7 +288,7 @@ func TestAgentCacheHitMissingOutputErrors(t *testing.T) {
 			"golden": map[string]any{"type": "string"},
 		},
 	}
-	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
 	_, hit, err := readAgentCache(rc, stage)
 	if err == nil || hit {
 		t.Fatalf("a partial committed plan must error (hit=%v err=%v)", hit, err)
@@ -324,7 +306,7 @@ func TestAgentCacheHitBadTypeErrors(t *testing.T) {
 		"cache":   map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"},
 		"outputs": map[string]any{"tests": map[string]any{"type": "string_list"}},
 	}
-	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
 	if _, hit, err := readAgentCache(rc, stage); err == nil || hit {
 		t.Fatalf("a bad-typed cached value must error (hit=%v err=%v)", hit, err)
 	}
@@ -360,7 +342,7 @@ func TestBedStepOutcomes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "check-live.log"), []byte(log), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rc := &runCtx{workdir: wd}
+	rc := &verbEnv{workdir: wd}
 	rows := bedStepOutcomes(rc, "check-omarchy-pr-7-vm")
 	if len(rows) != 4 {
 		t.Fatalf("rows = %d, want 4 (the 2 rec-* steps excluded): %+v", len(rows), rows)
@@ -394,7 +376,7 @@ func TestBedStepOutcomes(t *testing.T) {
 }
 
 func TestMediaGateSpecUsesPipelineMin(t *testing.T) {
-	rc := &runCtx{media: map[string]any{
+	rc := &verbEnv{media: map[string]any{
 		"files": []any{"cast", "mp4"},
 		"min":   map[string]any{"cast": 7, "mp4": 9},
 	}}
@@ -407,7 +389,7 @@ func TestMediaGateSpecUsesPipelineMin(t *testing.T) {
 	}
 	// no run context: the built-in defaults still cover every file, with the
 	// EXACT engine values (mp4 4096 pinned so a silent loosening cannot recur).
-	defFiles, defMins := (&runCtx{}).mediaGateSpec()
+	defFiles, defMins := (&verbEnv{}).mediaGateSpec()
 	if len(defFiles) != 5 || defMins["mp4"] == nil {
 		t.Fatalf("defaults = %v %v", defFiles, defMins)
 	}

@@ -29,7 +29,7 @@ func TestCorpusFacts(t *testing.T) {
 	if err := os.WriteFile(corpus, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rc := &runCtx{workdir: dir}
+	rc := &verbEnv{workdir: dir}
 	run, okCount, skipped := corpusFacts(rc, bed, corpus)
 	if run != 3 {
 		t.Fatalf("run = %d, want 3 (the corpus steps only — behavior-1 is the oracle's, not a corpus step)", run)

@@ -29,11 +29,11 @@ import (
 // contract to the deterministic verdict (0 PASS, 2 FAIL, 3 SKIP, else
 // NO_VALIDATION).
 //
-// headSHA is the LANE's head, passed explicitly. It must NOT be read from the
-// process env: the batch lanes run concurrently and the per-lane value lives in
-// the run context (executor.go's "$env.PR_HEAD_SHA to this lane's head"), so an
-// os.Getenv here returns the operator's value or EMPTY — never this lane's.
-// Live-caught: the run logged `--var PR_HEAD_SHA=` while the lane's context
+// headSHA is the RUN's head, passed explicitly. It must NOT be read from the
+// process env: concurrent runs would share one process-global value, and the
+// per-run value lives in the run context (the env's PR_HEAD_SHA to this run's
+// head), so an os.Getenv here returns the operator's value or EMPTY — never this
+// run's. Live-caught: the run logged `--var PR_HEAD_SHA=` while the run context
 // carried a real sha.
 //
 // This function is the ONE OWNER of the bed's venue lifecycle. `charly check

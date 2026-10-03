@@ -33,14 +33,14 @@ func truncate(s string, n int) string {
 
 // runAgent — the P1 runtime (standalone CLI + the agent stage); the turn cap
 // from the env (the CLI default).
-func runAgent(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string) (string, error) {
+func runAgent(ctx context.Context, rc *verbEnv, systemPrompt, prompt string, tools []string) (string, error) {
 	return runAgentTurns(ctx, rc, systemPrompt, prompt, tools, 0, nil)
 }
 
 // runAgentTurns: the runtime with an EXPLICIT turn cap (0 = the env default) —
 // never a per-stage os.Setenv (process-global, raced the batch lanes). `stage`
 // carries the optional per-stage llm override (env > stage > entity > default).
-func runAgentTurns(ctx context.Context, rc *runCtx, systemPrompt, prompt string, tools []string, stageMaxTurns int, stage *params.StageLLMSpec) (string, error) {
+func runAgentTurns(ctx context.Context, rc *verbEnv, systemPrompt, prompt string, tools []string, stageMaxTurns int, stage *params.LLMSpec) (string, error) {
 	sys := systemPrompt // skills are resolved in runAgentStage against the entity's corpus
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
@@ -116,7 +116,7 @@ func lastVerdict(msgs []chatMsg) string {
 // ...) so a lane can point at a generated corpus outside its own tree (e.g.
 // $env.EVAL_UMBRELLA/marketplace/distros/skills) without a hard-coded path; a
 // relative result is then joined with the run workdir.
-func skillCorpus(rc *runCtx) string {
+func skillCorpus(rc *verbEnv) string {
 	if rc == nil {
 		return ""
 	}
@@ -146,7 +146,7 @@ func (e *redoError) Error() string { return e.msg }
 // whose committed plan is MISSING a declared output is an error too (a partial
 // plan must never render as an empty/nil bed var). Cached values are validated
 // against the declared #OutputType, exactly like an agent reply.
-func readAgentCache(rc *runCtx, raw map[string]any) (map[string]any, bool, error) {
+func readAgentCache(rc *verbEnv, raw map[string]any) (map[string]any, bool, error) {
 	spec, _ := raw["cache"].(map[string]any)
 	if len(spec) == 0 {
 		return nil, false, nil

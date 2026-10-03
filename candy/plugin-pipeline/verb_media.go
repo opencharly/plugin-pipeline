@@ -13,19 +13,19 @@ import (
 // verb_media.go — the lifted `media` verb. The plan stage body (runMedia) MOVED
 // here from media.go when the stage kind became a reachable verb: it is registered
 // as {Class: "verb", Word: "media", InputDef: "#PipelineMediaInput"} and
-// dispatched either by runStage (a kind:pipeline stage) or by Invoke (a
+// dispatched by Invoke (a
 // `<word>: <input>` step in any plan). mediaDir — the layout resolver shared with
-// the media_gate probe — stays in media.go. ONE body, two callers (R3).
+// the media_gate probe — stays in media.go. ONE body, one caller (R3).
 
 // runVerbMedia is the verb handler. media produces no outputs — its artifact is
 // the assembled dir — so only the error is returned. The ledger (unused by the
 // body today, kept for its signature) comes from the env.
 func runVerbMedia(in params.PipelineMediaInput, e *verbEnv) (map[string]any, error) {
-	rc := e.runCtx()
-	return nil, rc.runMedia(e.stageRaw(in), e.l)
+	rc := e
+	return nil, rc.runMedia(e.stageRaw(in))
 }
 
-func (rc *runCtx) runMedia(raw map[string]any, l *ledger) error {
+func (rc *verbEnv) runMedia(raw map[string]any) error {
 	pr := rc.pr
 	if pr == "" {
 		pr = "unknown"

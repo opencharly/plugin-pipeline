@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 )
 
 func TestProbeMediaGate(t *testing.T) {
@@ -62,7 +60,7 @@ func TestProbeConfigAudit(t *testing.T) {
 }
 
 func TestResolveValue(t *testing.T) {
-	rc := &runCtx{pr: "10140", calver: "2026.251.1200", workdir: t.TempDir(), env: map[string]string{"EVAL_REPO": "omacom/omarchy"}}
+	rc := &verbEnv{pr: "10140", calver: "2026.251.1200", workdir: t.TempDir(), env: map[string]string{"EVAL_REPO": "omacom/omarchy"}}
 	if got := rc.resolveValue("pr-$pr"); got != "pr-10140" {
 		t.Fatalf("resolveValue = %v", got)
 	}
@@ -71,20 +69,16 @@ func TestResolveValue(t *testing.T) {
 	}
 }
 
-func TestRunPlanGenerate(t *testing.T) {
+func TestGenerateStage_RendersTemplate(t *testing.T) {
 	wd := t.TempDir()
-	p := params.PipelineInput{
-		Stages: []params.Stage{
-			{"id": "bed-render", "kind": "generate",
-				"template": "# report for pr-$pr", "vars": map[string]any{"pr": "$pr"},
-				"out": wd + "/out.md"},
-		},
+	stage := map[string]any{
+		"id": "bed-render", "kind": "generate",
+		"template": "# report for pr-$pr", "vars": map[string]any{"pr": "$pr"},
+		"out": wd + "/out.md",
 	}
-	l := newLedger()
-	rc := &runCtx{pr: "7", calver: "c", workdir: wd, env: map[string]string{}, ledger: l}
-	res, err := rc.runStage(nil, "generate", "bed-render", p.Stages[0], l)
-	if err != nil || res.Status != "ok" {
-		t.Fatalf("generate: %v %v", res, err)
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{}}
+	if err := rc.runGenerate(stage); err != nil {
+		t.Fatalf("generate: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "out.md"))
 	if string(b) != "# report for pr-7" {
@@ -132,7 +126,7 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 
 func TestCLIValidate(t *testing.T) {
 	dir := t.TempDir()
-	cfg := "test-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	cfg := "test-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +149,7 @@ func TestCLIValidate_FlatImportSibling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "split-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +170,7 @@ func TestCLIValidate_DiscoveredManifest(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "discovered-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	pipe := "discovered-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
 	if err := os.WriteFile(filepath.Join(sub, "charly.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +192,7 @@ func TestCLIValidate_RootWinsSameKind(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "split-plan:\n  pipeline:\n    stages:\n      - id: s\n        kind: gate\n        condition: \"true\"\n"
+	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}

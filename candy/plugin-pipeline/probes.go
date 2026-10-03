@@ -66,7 +66,7 @@ func mm(v any) map[string]any { m, _ := v.(map[string]any); return m }
 
 // runProbeV returns (ok, message, value) — the value powers probe stage outputs
 // (e.g. resolve_channel returns the resolved channel).
-func runProbeV(word string, input map[string]any, rc *runCtx) (bool, string, any) {
+func runProbeV(word string, input map[string]any, rc *verbEnv) (bool, string, any) {
 	if input == nil {
 		input = map[string]any{}
 	}
@@ -147,7 +147,7 @@ func runProbe(word string, input map[string]any) (bool, string) {
 // engine's built-in defaults for a standalone/legacy call with no run context.
 // The fallback values are UNCHANGED from the pre-unification inline table — the
 // entity's media.min is what overrides them (never a silent engine change).
-func (rc *runCtx) mediaGateSpec() (files []any, mins map[string]any) {
+func (rc *verbEnv) mediaGateSpec() (files []any, mins map[string]any) {
 	defFiles := []string{"cast", "gif", "mjpeg", "mp4", "png"}
 	defMin := map[string]int{"cast": 200, "gif": 1024, "mjpeg": 4096, "mp4": 4096, "png": 1024}
 	src := defFiles
@@ -178,7 +178,7 @@ func (rc *runCtx) mediaGateSpec() (files []any, mins map[string]any) {
 }
 
 // probeMediaGate: the media artifacts exist with the min sizes.
-func probeMediaGate(input map[string]any, rc *runCtx) (bool, string) {
+func probeMediaGate(input map[string]any, rc *verbEnv) (bool, string) {
 	dir := s(input["dir"])
 	files := ss(input["files"])
 	min := mm(input["min"])
@@ -210,7 +210,7 @@ func probeMediaGate(input map[string]any, rc *runCtx) (bool, string) {
 // (the probe layer's member of the RCA 2026.252.2210 env-race class: the
 // env fell back to the batch process-global, so the media gate checked
 // pr-<env>.<ext> instead of pr-<lane>.<ext>), the env only for CLI/legacy.
-func prN(rc *runCtx) string {
+func prN(rc *verbEnv) string {
 	if rc != nil && rc.pr != "" {
 		return rc.pr
 	}
@@ -422,7 +422,7 @@ func probeCorpusAudit(input map[string]any) (bool, string) {
 //
 // The gate FAILS when executed_checks == 0 or the control did not pass — the
 // lane classifies SETUP_DEFECT, never a publish.
-func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
+func probeLedgerGate(input map[string]any, rc *verbEnv) (bool, string, any) {
 	// the key aliases: the entity's input carries the bed_name/control_bed_name
 	// keys (the entity-name keys — the probe's path rooting would corrupt bare
 	// paths); honor both spellings so the entity is the single source.
@@ -478,7 +478,7 @@ func probeLedgerGate(input map[string]any, rc *runCtx) (bool, string, any) {
 // step identity comes from the corpus charly.yml (the single source): every
 // step id: in the corpus candy's plan is a corpus step. Never conflated with
 // the oracle-authored assertions — a corpus result is upstream's own contract.
-func corpusFacts(rc *runCtx, bed string, corpusFile any) (run, okCount, skipped int) {
+func corpusFacts(rc *verbEnv, bed string, corpusFile any) (run, okCount, skipped int) {
 	corpusPath := s(corpusFile)
 	if corpusPath == "" {
 		return 0, 0, 0
@@ -540,7 +540,7 @@ func corpusFacts(rc *runCtx, bed string, corpusFile any) (run, okCount, skipped 
 // recording loop. The plan steps live in the check-live phase's log (the
 // top-level summary.yml carries only the phase steps: vm-build/vm-create/
 // deploy-add/check-live — the 952-era confusion, now resolved).
-func countExecutedSteps(rc *runCtx, bed string) int {
+func countExecutedSteps(rc *verbEnv, bed string) int {
 	n := 0
 	for _, st := range bedStepOutcomes(rc, bed) {
 		if st["status"] == "ok" || st["status"] == "fail" {
@@ -556,7 +556,7 @@ func countExecutedSteps(rc *runCtx, bed string) int {
 // [{id, name, status}] with status ok|fail|skip; the recording loop (rec-*) is
 // excluded (media presence is never verification). A probe output carries these
 // so the eval record needs no re-parse of logs.
-func bedStepOutcomes(rc *runCtx, bed string) []map[string]any {
+func bedStepOutcomes(rc *verbEnv, bed string) []map[string]any {
 	base := filepath.Join(rc.workdir, ".check", bed)
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -606,7 +606,7 @@ func bedStepOutcomes(rc *runCtx, bed string) []map[string]any {
 }
 
 // controlPassed: the control bed's latest run passed completely.
-func controlPassed(rc *runCtx, bed string) bool {
+func controlPassed(rc *verbEnv, bed string) bool {
 	base := filepath.Join(rc.workdir, ".check", bed)
 	entries, err := os.ReadDir(base)
 	if err != nil {

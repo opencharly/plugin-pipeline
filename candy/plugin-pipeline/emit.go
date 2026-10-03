@@ -76,7 +76,7 @@ var emitPluginSchema = sync.OnceValues(func() (cue.Value, error) {
 // leaf without markers is plain ref-resolved. The RESULT is always a structured
 // string, so the CUE encoder owns YAML quoting — the difference from `generate`,
 // where the template IS the file.
-func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
+func (rc *verbEnv) resolveEmitValue(v any, vars map[string]any) (any, error) {
 	switch t := v.(type) {
 	case string:
 		// $report.<key> names a string in the entity's report: block (the prose
@@ -117,7 +117,7 @@ func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
 // reportRef resolves a `$report.<key>` reference to the entity report: block's
 // string value (the prose template). Mirrors the generate stage's `$report.X`
 // contract — one lookup, no duplication of the template machinery.
-func (rc *runCtx) reportRef(ref string) (string, bool) {
+func (rc *verbEnv) reportRef(ref string) (string, bool) {
 	if !strings.HasPrefix(ref, "$report.") || rc.report == nil {
 		return "", false
 	}
@@ -142,7 +142,7 @@ func (rc *runCtx) reportRef(ref string) (string, bool) {
 // returning the marker unchanged would ship a corrupt artifact — exactly the
 // bug class this stage exists to remove. `@github...` candy refs stay literal
 // (the @-grammar would otherwise eat the prefix) and are NOT a var miss.
-func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) (string, error) {
+func (rc *verbEnv) renderStringLeaf(tmpl string, vars map[string]any) (string, error) {
 	var renderErr error
 	out := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		if renderErr != nil {

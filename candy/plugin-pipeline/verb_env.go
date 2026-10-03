@@ -3,7 +3,6 @@ package pluginpipeline
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 
@@ -14,16 +13,17 @@ import (
 
 // verb_env.go — the LIFTED-VERB contract. Each of the seven workflow stage kinds
 // (agent, probe, ade, generate, emit, media, gate) is registered as an ordinary
-// `verb:` capability and reachable from any charly plan (`<word>: <input>` sugar),
-// not only from a kind:pipeline entity's `stages:`. The stage BODY moves to
-// verb_<word>.go; the handler `runVerb<Word>(in params.Pipeline<Word>Input, e
-// *verbEnv)` returns the stage's Outputs map and an error, and the CALLER owns
-// status/message/trigger bookkeeping (runStage for a plan stage, Invoke for a
-// standalone verb dispatch) — one body, two callers (R3).
+// `verb:` capability and reachable from any charly plan (`<word>: <input>` sugar).
+// The stage BODY lives in verb_<word>.go; the handler `runVerb<Word>(in
+// params.Pipeline<Word>Input, e *verbEnv)` returns the stage's Outputs map and an
+// error, and the CALLER owns status/message/trigger bookkeeping (the verb Invoke
+// dispatch in plugin.go) — one body, one caller (R3).
 //
-// verbEnv IS THE RUN CONTEXT the bodies consume. The nine declared fields are the
-// per-run state a stage reads; the four RUN-CONTEXT fields below them are not
-// decorative — each closes a behaviour-preservation gap the D2 nine cannot close:
+// verbEnv IS THE RUN CONTEXT the bodies consume. It carries the per-run state a
+// stage reads. `resolve` is the reference resolver: a verb reached standalone
+// wires it to the IDENTITY function (the caller's plan already owns ref
+// resolution, so a lone verb must not re-interpret `$pr`/`@stage` text); any
+// other construction leaves it nil and resolveRefs applies the built-in grammar.
 //
 //   - repo:  the agent/PR tools resolve their gh target from rc.repo (tools.go
 //     prRef). The staged repo comes from the ENTITY, never the stage body, so a
@@ -31,20 +31,14 @@ import (
 //   - ctx:   the agent and ade bodies are cancellable (runAgentTurns -> chat,
 //     runAdeBedKit -> the host executor). A context cannot be reconstructed from
 //     a params struct.
-//   - id:    the agent body names the stage in its USER message ("Stage: <id>")
-//     and in its error/log lines; #PipelineAgentInput deliberately has no `id`.
-//   - raw:   the ORIGINAL authored stage map, carried for the plan path only.
-//     Re-deriving it from the typed input is LOSSY: encoding/json's omitempty is
-//     inert for STRUCT-typed fields, so `llm:`/`cache:`/`redo:` always reappear as
-//     ZERO objects. stageLLM() returns nil only when the key is ABSENT (it checks
-//     `block, ok := raw["llm"]; if !ok || block == nil`), so a re-derived map would
-//     give every stage a non-nil zero llm override where today it has none — a
-//     silent config-precedence change. When raw is nil (the standalone dispatch)
-//     the handler materialises the input with mapOf() instead.
-//
-// The pipeline path therefore reaches its bodies through the ORIGINAL map; the
-// standalone path through the typed input the host supplied. Both go through
-// ONE handler per verb.
+//   - id:    the agent body names the stage in its USER message ("Stage: <id>").
+//     #PipelineAgentInput deliberately has no `id`.
+//   - raw:   the ORIGINAL authored stage map, carried for the wire path. The
+//     AUTHORED map is the wire's own plugin_input, so `llm:`/`cache:`/`redo:`
+//     keep their ABSENCE — encoding/json's omitempty is inert for STRUCT-typed
+//     fields, so a re-derived map would give every stage a non-nil zero llm
+//     override where today it has none (a silent config-precedence change). When
+//     raw is nil the handler materialises the typed input with mapOf() instead.
 type verbEnv struct {
 	resolve func(string) string
 	report  map[string]any
@@ -52,44 +46,22 @@ type verbEnv struct {
 	skills  map[string]any
 	llm     params.LLMSpec
 	pr      string
+	repo    string
 	calver  string
 	workdir string
+	env     map[string]string
 	ex      *sdk.Executor
-	l       *ledger
 
 	// run-context fields (see the header).
-	repo string
-	ctx  context.Context
-	id   string
-	raw  map[string]any
+	ctx context.Context
+	id  string
+	raw map[string]any
 }
 
-// verbEnv fills the env from the live pipeline run. The arm then overrides ctx,
-// id and raw for the stage it is about to run.
-func (rc *runCtx) verbEnv() *verbEnv {
-	if rc == nil {
-		return standaloneVerbEnv(nil, "")
-	}
-	return &verbEnv{
-		resolve: rc.resolveRefs,
-		report:  rc.report,
-		media:   rc.media,
-		skills:  rc.skills,
-		llm:     rc.llm,
-		pr:      rc.pr,
-		calver:  rc.calver,
-		workdir: rc.workdir,
-		ex:      rc.ex,
-		l:       rc.ledger,
-		repo:    rc.repo,
-	}
-}
-
-// standaloneVerbEnv is the env for a verb dispatched OUTSIDE a kind:pipeline run
+// standaloneVerbEnv is the env for a verb dispatched OUTSIDE any pipeline run
 // (a `<word>: <input>` step in any plan). The reference resolver is the IDENTITY
-// function: the caller's plan already owns ref resolution, so a lone verb must not
-// re-interpret `$pr`/`@stage.output` text. Every map/struct fallback is zero and
-// there is no ledger.
+// function: the caller's plan already owns ref resolution, so a lone verb must
+// not re-interpret `$pr`/`@stage.output` text. Every map/struct fallback is zero.
 func standaloneVerbEnv(ex *sdk.Executor, workdir string) *verbEnv {
 	return &verbEnv{
 		resolve: func(s string) string { return s },
@@ -106,52 +78,13 @@ func (e *verbEnv) ctxOf() context.Context {
 	return e.ctx
 }
 
-// runCtx rebuilds the run context the stage bodies consume. resolveRefs is wired
-// to e.resolve, so the pipeline path delegates to the live run's own resolver
-// (env + ledger refs intact) and the standalone path leaves refs verbatim.
-func (e *verbEnv) runCtx() *runCtx {
-	if e == nil {
-		return &runCtx{}
-	}
-	rc := &runCtx{
-		pr:      e.pr,
-		repo:    e.repo,
-		calver:  e.calver,
-		workdir: e.workdir,
-		ledger:  e.l,
-		ex:      e.ex,
-		report:  e.report,
-		llm:     e.llm,
-		media:   e.media,
-		skills:  e.skills,
-	}
-	if e.resolve != nil {
-		rc.resolveOverride = e.resolve
-	}
-	return rc
-}
-
-// stageRaw: the authored stage map for the plan path, else the typed input
+// stageRaw: the authored stage map for the wire path, else the typed input
 // materialised back into the CUE-shaped map the bodies read.
 func (e *verbEnv) stageRaw(in any) map[string]any {
 	if e != nil && e.raw != nil {
 		return e.raw
 	}
 	return mapOf(in)
-}
-
-// decodeStageInput materialises a stage's authored map into its generated
-// #Pipeline<Word>Input type — the plan path's half of the ONE handler signature
-// (the standalone path decodes the same type off the wire). The typed value is
-// the stage's self-describing declaration; the body reads the ORIGINAL map
-// (verbEnv.raw) so no omitempty-shaped field is fabricated (see verb_env.go).
-func decodeStageInput[In any](raw map[string]any) In {
-	var in In
-	if raw != nil {
-		b, _ := json.Marshal(raw)
-		_ = json.Unmarshal(b, &in)
-	}
-	return in
 }
 
 // stageID: the stage id for messages, from the run context (standalone: the
@@ -181,26 +114,6 @@ func (v *verbFail) Error() string {
 }
 
 func (v *verbFail) Unwrap() error { return v.err }
-
-// failOnVerb applies a lifted verb's failure to the stage result, preserving each
-// kind's exact status/message/trigger/error contract: a plain error sets
-// fail + err.Error(); a *verbFail additionally carries the stage Message/Trigger
-// and returns the underlying error (nil for ade's fail_on — a triggered, not
-// fail-hard, outcome).
-func failOnVerb(res *StageResult, err error) (*StageResult, error) {
-	if err == nil {
-		return res, nil
-	}
-	res.Status = "fail"
-	res.Message = err.Error()
-	var vf *verbFail
-	if errors.As(err, &vf) {
-		res.Message = vf.msg
-		res.Trigger = vf.trigger
-		return res, vf.err
-	}
-	return res, err
-}
 
 // invokeLiftedVerb decodes a standalone verb dispatch and returns the verdict
 // envelope every charly verb replies with ({"status":"pass"} or
@@ -236,8 +149,8 @@ func invokeLiftedVerb[In any](ctx context.Context, req *pb.InvokeRequest, run fu
 	// cannot express ABSENCE for a struct-typed field (encoding/json's omitempty
 	// is inert for structs, so `llm:`/`cache:`/`redo:` would be fabricated as
 	// zero objects). With raw set from the wire, stageRaw hands the body exactly
-	// what was authored on BOTH paths. A dispatch that carries NO plugin_input
-	// authors nothing: the raw map is EMPTY, not a zero-struct reconstruction.
+	// what was authored. A dispatch that carries NO plugin_input authors nothing:
+	// the raw map is EMPTY, not a zero-struct reconstruction.
 	e.raw = map[string]any{}
 	if len(pluginInput) > 0 {
 		var rawMap map[string]any

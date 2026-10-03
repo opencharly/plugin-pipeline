@@ -8,17 +8,17 @@ import (
 )
 
 // verb_probe.go — the lifted `probe` verb. The plan stage's probe LOOP MOVED here
-// from executor.go's runStage when the stage kind became a reachable verb: it is
+// from the retired in-process executor when the stage kind became a reachable verb: it is
 // registered as {Class: "verb", Word: "probe", InputDef: "#PipelineProbeInput"}
-// and dispatched either by runStage (a kind:pipeline stage) or by Invoke (a
+// and dispatched by Invoke (a
 // `<word>: <input>` step in any plan). The probe IMPLEMENTATIONS (runProbeV and
-// the deterministic verbs) stay in probes.go. ONE body, two callers (R3).
+// the deterministic verbs) stay in probes.go. ONE body, one caller (R3).
 
 // runVerbProbe is the verb handler: the outputs map plus, on failure, a
 // *verbFail carrying the probe message and the stage's redo trigger (the caller
 // sets res.Message/Trigger from it and returns the wrapped error).
 func runVerbProbe(in params.PipelineProbeInput, e *verbEnv) (map[string]any, error) {
-	rc := e.runCtx()
+	rc := e
 	return runProbeStage(rc, e.stageRaw(in))
 }
 
@@ -26,7 +26,7 @@ func runVerbProbe(in params.PipelineProbeInput, e *verbEnv) (map[string]any, err
 // stage's Outputs map. On the first failing verb it returns the PARTIAL outputs
 // (the verbs that already passed) plus the *verbFail — never the mapped/spread
 // outputs, which the original arm also skipped on failure.
-func runProbeStage(rc *runCtx, raw map[string]any) (map[string]any, error) {
+func runProbeStage(rc *verbEnv, raw map[string]any) (map[string]any, error) {
 	verbs := strList(raw["verbs"])
 	input := rc.resolveValue(anyMap(raw["input"]))
 	inputMap, _ := input.(map[string]any)

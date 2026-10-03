@@ -6,9 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // root_cause_fixes_test.go — the regression locks for the live-caught defects
@@ -42,35 +39,6 @@ func TestLastLinesKeepsTheDiagnosisTail(t *testing.T) {
 		if !strings.HasPrefix(ln, "banner line") && !strings.HasPrefix(ln, "charly: error:") && !strings.HasPrefix(ln, "…") {
 			t.Fatalf("summary carries a partial line: %q", ln)
 		}
-	}
-}
-
-// TestAdeVerdictUsesTheLaneHeadNotTheProcessEnv: the ADE stage must pass the
-// LANE's head sha. The predecessor read os.Getenv("PR_HEAD_SHA"), which is the
-// operator's value or empty — never this lane's — and the live run logged
-// `--var PR_HEAD_SHA=`.
-//
-// The test drives resolveLLM's sibling path: it asserts the lane env is the
-// source by checking the run context binding (the same contract runPlanL
-// establishes), and that a CONCURRENT lane's value cannot be observed through
-// the process env.
-func TestAdeVerdictUsesTheLaneHeadNotTheProcessEnv(t *testing.T) {
-	t.Setenv("PR_HEAD_SHA", "") // no operator pin
-	// bind two lanes' heads the way runPlanL does
-	mk := func(pr, sha string) *runCtx {
-		return &runCtx{pr: pr, env: map[string]string{"PR_NUMBER": pr, "PR_HEAD_SHA": sha}}
-	}
-	a := mk("1", "aaaa")
-	b := mk("2", "bbbb")
-	if a.env["PR_HEAD_SHA"] != "aaaa" || b.env["PR_HEAD_SHA"] != "bbbb" {
-		t.Fatal("per-lane head bindings must be independent")
-	}
-	// the process env carries nothing — reading it (the old bug) yields empty
-	if got := os.Getenv("PR_HEAD_SHA"); got != "" {
-		t.Fatalf("process env must stay empty in this test, got %q", got)
-	}
-	if a.env["PR_HEAD_SHA"] == os.Getenv("PR_HEAD_SHA") {
-		t.Fatal("the lane's head must come from the run context, not the process env")
 	}
 }
 
@@ -187,106 +155,7 @@ func TestPipelineToolGroupIsGone(t *testing.T) {
 		t.Fatalf("tools: [pipeline] must yield no tools, got %d", len(got))
 	}
 	// the surviving groups still render
-	if got := buildTools([]string{"pr", "ledger"}); len(got) != 7 {
-		t.Fatalf("pr+ledger must yield 7 tools, got %d", len(got))
-	}
-}
-
-// TestLaneReportExitIsAGate: a batch whose lane FAILED must exit non-zero.
-//
-// Live defect: runBatch printed each lane's error and then returned `0, nil`
-// unconditionally, so a batch in which the lane ended in the LOOP-GUARD
-// escalation still printed "pipeline eval-pr-plan: OK" and exited 0 — the exit
-// status carried no information (R7 violated). This locks the aggregate.
-func TestLaneReportExitIsAGate(t *testing.T) {
-	// all lanes OK -> exit 0
-	ok := &laneReport{}
-	ok.record("1", nil)
-	ok.record("2", nil)
-	if code, err := ok.exit("plan", 4); code != 0 || err != nil {
-		t.Fatalf("an all-clean batch must exit 0, got code=%d err=%v", code, err)
-	}
-
-	// ONE failed lane -> non-zero exit, and the error names it
-	bad := &laneReport{}
-	bad.record("1", nil)
-	bad.record("2", errBoom)
-	code, err := bad.exit("plan", 4)
-	if code == 0 {
-		t.Fatal("a batch with a failed lane must exit non-zero")
-	}
-	if err == nil || !strings.Contains(err.Error(), "2:") {
-		t.Fatalf("the aggregate error must name the failed lane, got %v", err)
-	}
-
-	// EVERY lane failed -> still non-zero, and the counts are honest
-	allBad := &laneReport{}
-	allBad.record("1", errBoom)
-	allBad.record("2", errBoom)
-	if code, _ := allBad.exit("plan", 2); code == 0 {
-		t.Fatal("a totally-failed batch must exit non-zero")
-	}
-	if allBad.failed != 2 || allBad.done != 2 {
-		t.Fatalf("counts must be honest: failed=%d done=%d", allBad.failed, allBad.done)
-	}
-}
-
-// errBoom is a stand-in lane failure.
-var errBoom = &laneErr{}
-
-type laneErr struct{}
-
-func (*laneErr) Error() string { return "boom" }
-
-// TestLedgerPathIsPerLane: the ledger dump must be PER-LANE.
-//
-// Live defect: all lanes wrote the SAME `workdir/stage-findings.yml`, so a
-// concurrent batch left exactly ONE lane's ledger on disk and a FAILING lane's
-// forensic artifact was destroyed by a sibling — the same per-lane-state class
-// the ledger OBJECT already fixed (RCA 2026.252.2210), never applied to the
-// dump PATH. Measured: a 2-lane run left a single file carrying one lane's
-// stages.
-func TestLedgerPathIsPerLane(t *testing.T) {
-	wd := t.TempDir()
-	a := ledgerPath(wd, "12137")
-	b := ledgerPath(wd, "12135")
-	if a == b {
-		t.Fatalf("two lanes collided on the same ledger path: %s", a)
-	}
-	if !strings.Contains(a, "12137") {
-		t.Fatalf("the path must carry the lane's PR, got %s", a)
-	}
-	// a generic single-entity run (no PR) keeps the bare name
-	if got := ledgerPath(wd, ""); got != filepath.Join(wd, "stage-findings.yml") {
-		t.Fatalf("the no-PR path must stay the bare name, got %s", got)
-	}
-}
-
-// TestDumpLedgerRecordsDuration: the dump must carry the per-stage wall-clock
-// time the runner already measures. Without it the one artifact that could
-// answer "where did the lane's time go?" carries no timing.
-func TestDumpLedgerRecordsDuration(t *testing.T) {
-	wd := t.TempDir()
-	l := newLedger()
-	l.put(&StageResult{ID: "oracle", Kind: "agent", Status: "ok", Duration: 90 * time.Second})
-	l.put(&StageResult{ID: "control", Kind: "ade", Status: "ok", Duration: 177 * time.Second})
-	path := filepath.Join(wd, "stage-findings.yml")
-	if err := dumpLedger(l, path); err != nil {
-		t.Fatalf("dumpLedger: %v", err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []map[string]any
-	if err := yaml.Unmarshal(b, &rows); err != nil {
-		t.Fatalf("not valid YAML: %v\n%s", err, b)
-	}
-	got := map[string]any{}
-	for _, r := range rows {
-		got[r["stage"].(string)] = r["duration_seconds"]
-	}
-	if got["oracle"] != 90 || got["control"] != 177 {
-		t.Fatalf("durations not recorded: %v", got)
+	if got := buildTools([]string{"pr", "ledger"}); len(got) != 5 {
+		t.Fatalf("pr+ledger must yield 5 tools, got %d", len(got))
 	}
 }

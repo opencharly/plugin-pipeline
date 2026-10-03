@@ -11,15 +11,15 @@ import (
 // verb_generate.go — the lifted `generate` verb. The plan stage body (runGenerate)
 // MOVED here from render.go when the stage kind became a reachable verb: it is
 // registered as {Class: "verb", Word: "generate", InputDef: "#PipelineGenerateInput"}
-// and dispatched either by runStage (a kind:pipeline stage) or by Invoke (a
+// and dispatched by Invoke (a
 // `<word>: <input>` step in any plan). The template ENGINE (tmplRe, the marker
 // transforms, the frontmatter validator) stays in render.go; only the stage body
-// moved. ONE body, two callers (R3).
+// moved. ONE body, one caller (R3).
 
 // runVerbGenerate is the verb handler. generate produces no outputs — its
 // artifact is the rendered `out` file — so only the error is returned.
 func runVerbGenerate(in params.PipelineGenerateInput, e *verbEnv) (map[string]any, error) {
-	return nil, e.runCtx().runGenerate(e.stageRaw(in))
+	return nil, e.runGenerate(e.stageRaw(in))
 }
 
 // runGenerate renders an INLINE template with typed vars and writes it to out,
@@ -27,7 +27,7 @@ func runVerbGenerate(in params.PipelineGenerateInput, e *verbEnv) (map[string]an
 // may carry a per-marker transform (`${var:negate}` / `${var:json}` /
 // `${var:yaml}`) applied to that marker alone, so ONE template renders a whole
 // record (both beds + the structured results).
-func (rc *runCtx) runGenerate(raw map[string]any) error {
+func (rc *verbEnv) runGenerate(raw map[string]any) error {
 	tmpl := s(raw["template"])
 	if ref := s(raw["template"]); strings.HasPrefix(ref, "$report.") {
 		if v, ok := rc.report[strings.TrimPrefix(ref, "$report.")]; ok {

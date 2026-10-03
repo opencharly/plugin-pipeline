@@ -12,19 +12,19 @@ import (
 // verb_emit.go — the lifted `emit` verb. The plan stage body (runEmit) MOVED here
 // from emit.go when the stage kind became a reachable verb: it is registered as
 // {Class: "verb", Word: "emit", InputDef: "#PipelineEmitInput"} and dispatched
-// either by runStage (a kind:pipeline stage) or by Invoke (a `<word>: <input>`
+// by Invoke (a `<word>: <input>`
 // step in any plan). The emit SCHEMA machinery (emitSchema, resolveEmitValue, the
-// schema-first writer) stays in emit.go. ONE body, two callers (R3).
+// schema-first writer) stays in emit.go. ONE body, one caller (R3).
 
 // runVerbEmit is the verb handler. emit produces no outputs — its artifact is the
 // serialized `out` file — so only the error is returned.
 func runVerbEmit(in params.PipelineEmitInput, e *verbEnv) (map[string]any, error) {
-	return nil, e.runCtx().runEmit(e.stageRaw(in))
+	return nil, e.runEmit(e.stageRaw(in))
 }
 
 // runEmit implements the `emit` stage: assemble `value` (ref-resolved), validate
 // it against `schema`, then marshal to `out` (yaml by default).
-func (rc *runCtx) runEmit(raw map[string]any) error {
+func (rc *verbEnv) runEmit(raw map[string]any) error {
 	schema := s(raw["schema"])
 	if schema == "" {
 		return errString("emit: schema required (a CUE def name or a literal CUE source)")

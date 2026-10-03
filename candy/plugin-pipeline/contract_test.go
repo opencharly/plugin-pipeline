@@ -1,8 +1,6 @@
 package pluginpipeline
 
 import (
-	"context"
-	"strings"
 	"testing"
 )
 
@@ -35,50 +33,3 @@ func TestTypedDecode_ContractViolations(t *testing.T) {
 		t.Fatal("a prose-only reply must be rejected")
 	}
 }
-
-// TestVerdictGate_SkipWhen: the designed seam — a FAIL verdict + skip_when on a
-// downstream stage records it as skipped, never as ok. The regression lock for
-// the computed-but-dropped verdict (RCA 2026.252.2250).
-func TestVerdictGate_SkipWhen(t *testing.T) {
-	rc := &runCtx{pr: "10115", calver: "2026.252.1", workdir: t.TempDir(), env: map[string]string{}, ledger: newLedger()}
-	rc.ledger.put(&StageResult{ID: "eval", Kind: "ade", Status: "ok", Outputs: map[string]any{"verdict": "FAIL", "summary": "check-run exit 2"}})
-	// the report stage declares skip_when: "@eval.verdict != PASS"
-	res := &StageResult{ID: "report", Kind: "agent", Status: "ok"}
-	if sw := "@eval.verdict != PASS"; sw != "" {
-		if rc.evalCond(sw) {
-			res.Status = "skipped"
-			res.Message = "skipped: " + sw
-		}
-	}
-	if res.Status != "skipped" {
-		t.Fatalf("a FAIL verdict must gate the report stage to skipped, got %s", res.Status)
-	}
-	// and a PASS verdict lets it run
-	rc.ledger.put(&StageResult{ID: "eval", Kind: "ade", Status: "ok", Outputs: map[string]any{"verdict": "PASS"}})
-	res2 := &StageResult{ID: "report", Kind: "agent", Status: "ok"}
-	if sw := "@eval.verdict != PASS"; sw != "" {
-		if rc.evalCond(sw) {
-			res2.Status = "skipped"
-		}
-	}
-	if res2.Status != "ok" {
-		t.Fatalf("a PASS verdict must let the report run, got %s", res2.Status)
-	}
-}
-
-// TestLedgerFacts: the structured context injection — the agent narrates from
-// facts, never from path-guessing.
-func TestLedgerFacts(t *testing.T) {
-	l := newLedger()
-	l.put(&StageResult{ID: "triage", Kind: "agent", Status: "ok", Outputs: map[string]any{"plan-json": map[string]any{"class": "visual"}}})
-	l.put(&StageResult{ID: "eval", Kind: "ade", Status: "ok", Outputs: map[string]any{"verdict": "FAIL", "summary": "check-run exit 2"}})
-	f := l.facts()
-	if !strings.Contains(f, "triage [agent ok]") || !strings.Contains(f, "eval [ade ok]") {
-		t.Fatalf("facts must carry every stage: %q", f)
-	}
-	if !strings.Contains(f, "verdict = \"FAIL\"") {
-		t.Fatalf("facts must carry the verdict: %q", f)
-	}
-}
-
-var _ = context.Background

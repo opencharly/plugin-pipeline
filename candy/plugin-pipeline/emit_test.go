@@ -69,14 +69,9 @@ func TestEmitStage_SchemaFirstRecord(t *testing.T) {
 		},
 		"out": wd + "/eval.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{pr: "7", calver: "2026.259.0000", workdir: wd, env: map[string]string{}, ledger: l}
-	res, err := rc.runStage(nil, "emit", "record", stage, l)
-	if err != nil {
+	rc := &verbEnv{pr: "7", calver: "2026.259.0000", workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err != nil {
 		t.Fatalf("emit stage: %v", err)
-	}
-	if res.Status != "ok" {
-		t.Fatalf("emit status = %q, want ok", res.Status)
 	}
 	b, err := os.ReadFile(filepath.Join(wd, "eval.yml"))
 	if err != nil {
@@ -103,53 +98,12 @@ func TestEmitStage_RejectsSchemaViolation(t *testing.T) {
 		"value":  map[string]any{"pr": "7", "unknown_field": "x"},
 		"out":    wd + "/eval.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{pr: "7", workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "record", stage, l); err == nil {
+	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err == nil {
 		t.Fatal("emit with a schema-violating value: want an error, got nil")
 	}
 	if _, err := os.Stat(filepath.Join(wd, "eval.yml")); err == nil {
 		t.Fatal("emit wrote an artifact despite a schema violation")
-	}
-}
-
-// TestDumpLedger_SchemaFirst is the R10 coverage for the ledger-dump rewrite: a
-// row whose message contains ": " and a multi-line message must round-trip
-// through a parser. The former hand-rolled fmt.Fprintf writer was the same class
-// as the free-form record template.
-func TestDumpLedger_SchemaFirst(t *testing.T) {
-	wd := t.TempDir()
-	l := newLedger()
-	l.put(&StageResult{
-		ID: "gate", Kind: "probe", Status: "ok",
-		Message: "verdict: PASS — multi\nline: message",
-		Outputs: map[string]any{"executed_checks": 3},
-	})
-	l.put(&StageResult{ID: "eval", Kind: "ade", Status: "fail", Trigger: "setup-defect", Message: "boom: x"})
-	path := filepath.Join(wd, "stage-findings.yml")
-	if err := dumpLedger(l, path); err != nil {
-		t.Fatalf("dumpLedger: %v", err)
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var rows []map[string]any
-	if err := yaml.Unmarshal(b, &rows); err != nil {
-		t.Fatalf("ledger dump is not valid YAML: %v\n%s", err, b)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("rows = %d, want 2\n%s", len(rows), b)
-	}
-	// dumpLedger sorts by stage id, so find the row by its stage name.
-	var got string
-	for _, r := range rows {
-		if r["stage"] == "gate" {
-			got, _ = r["message"].(string)
-		}
-	}
-	if got != "verdict: PASS — multi\nline: message" {
-		t.Fatalf("multiline colon message did not round-trip: %q", got)
 	}
 }
 
@@ -168,9 +122,8 @@ func TestEmitStage_FileDefSelector(t *testing.T) {
 		"value":  map[string]any{"b": 2},
 		"out":    wd + "/two.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err != nil {
 		t.Fatalf("emit with a #Def selector: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "two.yml"))
@@ -195,9 +148,8 @@ func TestEmitStage_JSONFormat(t *testing.T) {
 		"format": "json",
 		"out":    wd + "/t.json",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err != nil {
 		t.Fatalf("emit json: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "t.json"))
@@ -222,9 +174,8 @@ func TestEmitStage_JSONFormatRejectsSchemaViolation(t *testing.T) {
 		"format": "json",
 		"out":    wd + "/t.json",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err == nil {
 		t.Fatal("emit json with a missing required field: want an error, got nil")
 	}
 	if _, err := os.Stat(filepath.Join(wd, "t.json")); err == nil {
@@ -244,9 +195,8 @@ func TestEmitStage_RejectsUnresolvedMarker(t *testing.T) {
 		"value":  map[string]any{"body": "hello ${nope}"},
 		"out":    wd + "/t.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err == nil {
 		t.Fatal("emit with an unresolved marker: want an error, got nil")
 	}
 }
@@ -263,9 +213,8 @@ func TestEmitStage_RejectsUnknownTransform(t *testing.T) {
 		"value":  map[string]any{"body": "${body:bogus}"},
 		"out":    wd + "/t.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err == nil {
 		t.Fatal("emit with an unknown transform: want an error, got nil")
 	}
 }
@@ -283,9 +232,8 @@ func TestEmitStage_RejectsNegateTransform(t *testing.T) {
 		"value":  map[string]any{"body": "${body:negate}"},
 		"out":    wd + "/t.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err == nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err == nil {
 		t.Fatal("emit with :negate on a string leaf: want an error, got nil")
 	}
 }
@@ -310,9 +258,8 @@ func TestEmitStage_StringLeafTemplate(t *testing.T) {
 		},
 		"out": wd + "/item.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err != nil {
 		t.Fatalf("emit string-leaf template: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "item.yml"))
@@ -338,9 +285,8 @@ func TestEmitStage_LiteralSchema(t *testing.T) {
 		"value":  map[string]any{"name": "a: b", "n": 3},
 		"out":    wd + "/thing.yml",
 	}
-	l := newLedger()
-	rc := &runCtx{workdir: wd, env: map[string]string{}, ledger: l}
-	if _, err := rc.runStage(nil, "emit", "emit", stage, l); err != nil {
+	rc := &verbEnv{workdir: wd, env: map[string]string{}}
+	if err := rc.runEmit(stage); err != nil {
 		t.Fatalf("emit with a literal schema: %v", err)
 	}
 	b, _ := os.ReadFile(filepath.Join(wd, "thing.yml"))
