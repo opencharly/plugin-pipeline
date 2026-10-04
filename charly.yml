@@ -44,11 +44,20 @@ check-pipeline-app:
 #     `--args-json`/`--mode` pair is accepted, while a malformed `--args-json` and an
 #     unsupported `--mode` are NAMED errors (the lowering emits `-p NAME="$NAME"` for
 #     every declared arg, so a dropped arg reaches the engine as an EMPTY value);
-#   - the last step runs the whole pipeline through the engine.
+#   - one step runs the whole pipeline through the engine;
+#   - the RESUME leg — the front-end subcommand that answers a gate the engine paused on — is
+#     witnessed for BOTH answers an approval takes: `--approve yes` carries the run to ok and
+#     `--approve no` to cancelled, which are not the same resume; for an INPUT gate's
+#     `--response-json` closing the loop back to a `$id.response.<path>` ref; and for its own
+#     usage refusal;
+#   - the SCHEDULE leg is witnessed through the UNIT DIRECTORY: `apply` writes both units,
+#     `list` reads them back out of that directory, and `remove` deletes them with the entry
+#     gone.
 #
-# UNRUN: authored, not yet executed on a host (its `${CHARLY_BIN}` needs a charly built
-# from the post-opencharly/charly#754 tree — the retired `version:` stamp — and the
-# workflow engine pin above).
+# MEASURED: this bed passes on the tree it ships in — 14 steps, 0 failed, 0 skipped. Its
+# engine leg needs a `${CHARLY_BIN}` carrying BOTH the `workflow` provider class (charly
+# >= v2026.277.0930) AND a workflow engine, which is what the R10 gate's own host supplies;
+# the front-end half needs nothing beyond this repo.
 check-pipeline-local:
     local:
         from: check-pipeline-app
@@ -270,4 +279,223 @@ check-pipeline-local:
                   YAML
                   CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan
                   rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the resume leg answers a paused APPROVAL — `pipeline run` reports needs_approval and leaves the gate handle, and `pipeline resume --approve yes` carries the SAME run to ok
+              id: pipeline-resume-approval-yes
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-approval-yes OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  gate-plan:
+                    pipeline:
+                      description: a plan that pauses on an approval
+                      steps:
+                        - id: ask
+                          approval: true
+                  YAML
+                  rc=0
+                  # `approval` is an EXECUTION ARM (the arms are run|pipeline|workflow|parallel|
+                  # for_each|input|plan|charly|approval), so a gate step carries it ALONE:
+                  # pairing it with `run:` is the "2 execution arms set" error pinned above.
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run gate-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'ran via workflow:lobster — status=needs_approval' "$d/run.out" || rc=1
+                  grep -q 'an approval is pending' "$d/run.out" || rc=1
+                  # the front-end records the gate handle BESIDE the lowered pair, which is what
+                  # lets `resume <name>` find the paused run without being handed a token
+                  # (cli.go: genDirOf + recordPending). Asserting the file asserts that the
+                  # writer (run) and the reader (resume) agree on ONE path.
+                  test -f "$d/.opencharly/pipelines/gate-plan/pending.json" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume gate-plan --approve yes > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=ok' "$d/res.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-approval-yes OK'
+                  exit $rc
+                in_container: false
+            - check: a paused approval answered `--approve no` carries the run to cancelled, not to ok — the two answers are not the same resume
+              id: pipeline-resume-approval-no
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-approval-no OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  gate-plan:
+                    pipeline:
+                      description: a plan that pauses on an approval
+                      steps:
+                        - id: ask
+                          approval: true
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run gate-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'status=needs_approval' "$d/run.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume gate-plan --approve no > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=cancelled' "$d/res.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-approval-no OK'
+                  exit $rc
+                in_container: false
+            - check: the same resume leg answers an INPUT gate — `--response-json` reaches the engine, the paused step's `$ask.response.<path>` resolves, and the run finishes
+              id: pipeline-resume-input-json
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-input-json OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  ask:
+                    pipeline:
+                      description: an input gate
+                      steps:
+                        - id: ask
+                          input:
+                            prompt: which branch?
+                            response_schema:
+                              type: object
+                              properties:
+                                branch:
+                                  type: string
+                              required:
+                                - branch
+                        - id: finish
+                          run: printf '%s' "$ask.response.branch" > answered.marker
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run ask > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'status=needs_input' "$d/run.out" || rc=1
+                  grep -q 'input is pending' "$d/run.out" || rc=1
+                  # the gate halted the run: nothing after the input step has run yet
+                  test ! -e "$d/answered.marker" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume ask --response-json '{"branch":"feature/x"}' > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=ok' "$d/res.out" || rc=1
+                  # a RESUMED input answer is recorded as `response`, never as `json`
+                  # (engine.go applyResume: Response + HasResp), so `$ask.response.branch`
+                  # is the ref that resolves it — this marker is the proof the whole loop closed
+                  [ "$(cat "$d/answered.marker" 2>/dev/null)" = "feature/x" ] || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-input-json OK'
+                  exit $rc
+                in_container: false
+            - check: '`pipeline resume` with no entity is refused with its usage line, never a silent no-op'
+              id: pipeline-resume-requires-an-entity
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-usage OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume > "$d/o" 2>&1 && rc=1
+                  grep -q 'pipeline resume <entity>' "$d/o" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/o" >&2; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-usage OK'
+                  exit $rc
+                in_container: false
+            - check: the schedule leg drives the engine and its units are real and removable — `apply` writes both units, `list` names the pipeline and its timer, `remove` deletes them
+              id: pipeline-schedule-apply-list-remove
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'schedule-apply-list-remove OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  # A per-run entity name, so a concurrent run of this bed cannot collide on the unit name
+                  # derived from it and cleanup can never remove someone else's timer. Lowercase ONLY: a
+                  # systemd unit name is lowercase, so the engine's derived unit name (and the pipeline name
+                  # `schedule list` reports back, which it reads off the unit) is the LOWERCASED entity — a
+                  # mixed-case entity name would never round-trip to the unit it produced.
+                  sfx=$(basename "$d" | tr -cd 'a-z0-9' | tail -c 13)
+                  name="sched-plan-$sfx"
+                  unitdir=$HOME/.config/systemd/user
+                  cleanup() {
+                    CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule remove "$name" >/dev/null 2>&1
+                    rm -f "$unitdir/charly-pipeline-$name-0.timer" "$unitdir/charly-pipeline-$name-0.service"
+                    rm -rf "$d"
+                  }
+                  trap cleanup EXIT
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<YAML
+                  $name:
+                    pipeline:
+                      description: a scheduled plan
+                      triggers:
+                        - schedule:
+                            cron: "13 3 * * *"
+                      steps:
+                        - id: s
+                          run: "true"
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule apply "$name" > "$d/apply.out" 2>&1 || rc=1
+                  grep -q "charly-pipeline-$name-0.timer" "$d/apply.out" || rc=1
+                  grep -q "charly-pipeline-$name-0.service" "$d/apply.out" || rc=1
+                  # `list` answers FROM THE UNIT DIRECTORY (cli.go: list names no pipeline and lowers nothing),
+                  # so an entry here is a unit that is really on disk — that is the proof the units are REAL,
+                  # and it needs no filesystem path of this step's own. (A shell default written as a brace-dollar
+                  # with a `:-` fallback would be read by the check-variable scanner as an unresolvable env key and
+                  # SKIP this step silently, so no such default appears here.)
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule list > "$d/list.out" 2>&1 || rc=1
+                  grep -q "$name" "$d/list.out" || rc=1
+                  grep -q "timer=charly-pipeline-$name-0.timer" "$d/list.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule remove "$name" > "$d/rm.out" 2>&1 || rc=1
+                  grep -q "charly-pipeline-$name-0.timer" "$d/rm.out" || rc=1
+                  # removal is asserted the same way: the entry is GONE from the unit directory
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule list > "$d/list2.out" 2>&1 || rc=1
+                  grep -q "$name" "$d/list2.out" && rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/apply.out" "$d/list.out" "$d/rm.out" "$d/list2.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'schedule-apply-list-remove OK'
+                  exit $rc
+                in_container: false
+            - check: the schedule leg's refusals are NAMED — `run-now` on a timer that was never applied and an unknown op both error by name, never a silent success
+              id: pipeline-schedule-named-errors
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'schedule-named-errors OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  sfx=$(basename "$d" | tr -cd 'a-z0-9' | tail -c 13)  # lowercase: systemd unit names are
+                  name="sched-plan-$sfx"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<YAML
+                  $name:
+                    pipeline:
+                      description: a scheduled plan
+                      triggers:
+                        - schedule:
+                            cron: "13 3 * * *"
+                      steps:
+                        - id: s
+                          run: "true"
+                  YAML
+                  rc=0
+                  # no `apply` in this step, so the timer cannot be installed: the op must refuse
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule run-now "$name" > "$d/rn.out" 2>&1 && rc=1
+                  grep -q 'is not installed (apply first)' "$d/rn.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule bogus "$name" > "$d/uo.out" 2>&1 && rc=1
+                  grep -q 'unknown op' "$d/uo.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/rn.out" "$d/uo.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'schedule-named-errors OK'
+                  exit $rc
                 in_container: false
