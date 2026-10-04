@@ -7,7 +7,7 @@ require (
 	github.com/openai/openai-go/v3 v3.61.0
 	github.com/opencharly/plugin-gh v0.2026252.1501
 	github.com/opencharly/sdk v0.2026276.255
-	github.com/opencharly/spec v0.2026276.1337
+	github.com/opencharly/spec v0.2026277.1407
 	gopkg.in/yaml.v3 v3.0.1
 )
 

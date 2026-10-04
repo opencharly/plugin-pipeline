@@ -18,6 +18,7 @@ import (
 //
 //	pipeline run <entity> [--dry-run] [--args-json <json-object>] [--mode human|tool]
 //	pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]
+//	pipeline schedule <apply|list|remove|run-now> [<entity>]
 //	pipeline validate <entity>
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
@@ -48,7 +49,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	var rest []string
 	for _, a := range args {
 		switch a {
-		case "run", "validate", "agent", "probe", "resume":
+		case "run", "validate", "agent", "probe", "resume", "schedule":
 			mode = a
 		default:
 			rest = append(rest, a)
@@ -60,7 +61,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			fmt.Println("pipeline self-test: ok (workflow front-end + agent runtime present)")
 			return 0, nil
 		}
-		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe|resume")
+		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe|resume|schedule")
 	case "validate":
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline validate <entity>")
@@ -170,6 +171,74 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			fmt.Printf("pipeline %s: resumed via workflow:%s — status=%s\n", name, engine, reply.Status)
 		} else {
 			fmt.Printf("pipeline %s: resumed via workflow:%s\n", name, engine)
+		}
+		return 0, nil
+	case "schedule":
+		if len(rest) == 0 {
+			return 2, fmt.Errorf("pipeline schedule <apply|list|remove|run-now> [<entity>]")
+		}
+		sop := rest[0]
+		switch sop {
+		case "apply", "list", "remove", "run-now":
+		default:
+			return 2, fmt.Errorf("pipeline schedule %s: unknown op — want apply|list|remove|run-now", sop)
+		}
+		name := ""
+		if len(rest) > 1 {
+			name = rest[1]
+		}
+		engine := "lobster"
+		// `list` answers from the unit directory, so it names no pipeline and lowers
+		// nothing. Every other op names ONE pipeline; `apply` additionally WRITES the
+		// trigger descriptor the engine's own apply reads, because the front-end owns the
+		// lowering and therefore owns the triggers that lowering implies — the engine must
+		// never have to re-derive an authored trigger from the generated pair.
+		if sop != "list" {
+			if name == "" {
+				return 2, fmt.Errorf("pipeline schedule %s <entity>", sop)
+			}
+			p, lerr := loadEntity(name)
+			if lerr != nil {
+				return 1, lerr
+			}
+			if p.Engine != "" {
+				engine = p.Engine
+			}
+			if sop == "apply" {
+				genDir := genDirOf(name)
+				if merr := os.MkdirAll(genDir, 0o755); merr != nil {
+					return 1, merr
+				}
+				if werr := writeScheduleDescriptor(name, genDir, p.Triggers); werr != nil {
+					return 1, werr
+				}
+			}
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline schedule %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", sop, engine, ops.OpWorkflowSchedule)
+		}
+		params, merr := json.Marshal(spec.WorkflowScheduleRequest{Op: sop, Pipeline: name})
+		if merr != nil {
+			return 1, fmt.Errorf("pipeline schedule %s: encode request: %w", sop, merr)
+		}
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowSchedule, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
+			return 1, fmt.Errorf("pipeline schedule %s: workflow:%s %s: %w", sop, engine, ops.OpWorkflowSchedule, ierr)
+		}
+		var sreply spec.WorkflowScheduleReply
+		if len(raw) > 0 {
+			if uerr := json.Unmarshal(raw, &sreply); uerr != nil {
+				return 1, fmt.Errorf("pipeline schedule %s: decode reply: %w", sop, uerr)
+			}
+		}
+		for _, u := range sreply.Units {
+			fmt.Println(u)
+		}
+		for _, e := range sreply.Entries {
+			fmt.Printf("%s\ttimer=%s\ton_calendar=%s\tactive=%t\tnext=%s\n", e.Pipeline, e.Timer, e.OnCalendar, e.Active, e.NextRun)
+		}
+		if sop == "list" && len(sreply.Entries) == 0 && len(sreply.Units) == 0 {
+			fmt.Println("pipeline schedule list: no scheduled pipelines")
 		}
 		return 0, nil
 	case "agent":
@@ -299,6 +368,51 @@ func runDispatchFlags(name string, rest []string) (map[string]string, string, er
 // directory the run never wrote.
 func genDirOf(name string) string {
 	return filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+}
+
+// scheduleDescriptor is the front-end's half of the scheduler contract: the IR's own
+// trigger list, wrapped with the pipeline name so the file describes itself. The engine's
+// `workflow-schedule apply` reads exactly this shape out of the run's gen dir
+// (plugin-lobster, schedule.go), so the writer here and the reader there are ONE
+// contract — the front-end never makes the engine re-derive an authored trigger from the
+// generated pair, which carries no triggers at all.
+type scheduleDescriptor struct {
+	Pipeline string                 `json:"pipeline"`
+	Triggers []spec.WorkflowTrigger `json:"triggers"`
+}
+
+// writeScheduleDescriptor records the pipeline's triggers where the engine's
+// `workflow-schedule apply` looks for them.
+//
+// It is written at APPLY time, not at lowering time: the descriptor is a projection of
+// the AUTHORED entity, and the authored entity is what an operator has just edited. A
+// descriptor written at lowering would silently schedule the triggers of the last run,
+// so `apply` after a trigger edit would install units for a cron the operator has already
+// changed. `apply` is therefore self-contained — it loads, projects, writes, and only
+// then dispatches.
+func writeScheduleDescriptor(name, genDir string, trigs []spec.PipelineTrigger) error {
+	desc := scheduleDescriptor{Pipeline: name, Triggers: make([]spec.WorkflowTrigger, 0, len(trigs))}
+	for _, t := range trigs {
+		desc.Triggers = append(desc.Triggers, spec.WorkflowTrigger{
+			Manual: t.Manual,
+			Schedule: spec.WorkflowSchedule{
+				Cron:       t.Schedule.Cron,
+				Timezone:   t.Schedule.Timezone,
+				Args:       t.Schedule.Args,
+				Persistent: t.Schedule.Persistent,
+			},
+		})
+	}
+	body, merr := json.MarshalIndent(desc, "", "  ")
+	if merr != nil {
+		return fmt.Errorf("pipeline schedule apply %s: encode triggers: %w", name, merr)
+	}
+	body = append(body, '\n')
+	path := filepath.Join(genDir, "schedule.json")
+	if werr := os.WriteFile(path, body, 0o644); werr != nil {
+		return fmt.Errorf("pipeline schedule apply %s: write %s: %w", name, path, werr)
+	}
+	return nil
 }
 
 // pendingGate is the handle a paused run leaves behind so that a LATER, SEPARATE process
