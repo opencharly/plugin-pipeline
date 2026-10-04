@@ -2,48 +2,119 @@
 
 package params
 
-// The kind:pipeline ENTITY body (a declared plan).
-type PipelineInput struct {
-	Version int64 `json:"version,omitempty"`
+// #OutputType: the typed-output contract an agent stage declares per output field.
+type OutputType struct {
+	Type string `json:"type"`
 
-	Repo string `json:"repo,omitempty"`
+	Enum []string `json:"enum,omitempty"`
 
-	Gates []string `json:"gates,omitempty"`
+	Description string `json:"description,omitempty"`
+}
 
-	Redo struct {
-		Max int64 `json:"max,omitempty"`
+// #RedoSpec: the per-stage redo/retry policy.
+type RedoSpec struct {
+	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
 
-		Escalate_after int64 `json:"escalate_after,omitempty"`
-	} `json:"redo,omitempty"`
+	Triggers map[string]string `json:"triggers,omitempty"`
 
-	Concurrency struct {
-		Lanes int64 `json:"lanes,omitempty"`
-	} `json:"concurrency,omitempty"`
+	Max int64 `json:"max,omitempty"`
+
+	Escalate_after int64 `json:"escalate_after,omitempty"`
+}
+
+// #CacheSpec: the committed-artifact cache for an agent's output, keyed by freshness.
+type CacheSpec struct {
+	Path string `json:"path"`
+
+	Key string `json:"key"`
+
+	Key_field string `json:"key_field,omitempty"`
+
+	Source string `json:"source,omitempty"`
+}
+
+// #MediaSpec: the pipeline-level media gate config.
+type MediaSpec struct {
+	Files []string `json:"files"`
+
+	Min map[string]int64 `json:"min"`
+
+	Dir string `json:"dir"`
+}
+
+// #ReportSpec: the report-rendering config a generate/emit stage carries.
+type ReportSpec struct {
+	Template string `json:"template"`
+
+	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
+
+	Bed_template string `json:"bed_template,omitempty"`
+
+	Control_bed_template string `json:"control_bed_template,omitempty"`
+}
+
+// Probe verb inputs (deterministic, engine-native).
+type MediaGateInput struct {
+	Dir string `json:"dir"`
+
+	Files []any/* CUE closed list */ `json:"files"`
+
+	Min map[string]int64 `json:"min"`
+}
+
+type LockAuditInput struct {
+	Trees []any /* CUE closed list */ `json:"trees"`
+}
+
+type SequencingInput struct {
+	Bed_prefix string `json:"bed_prefix"`
+
+	Golden string `json:"golden"`
+}
+
+type HeadFreshnessInput struct {
+	Plan_sha string `json:"plan_sha"`
+
+	Pr int64 `json:"pr"`
+
+	Repo string `json:"repo"`
+}
+
+type ConfigAuditInput struct {
+	Bed string `json:"bed"`
+
+	Pr int64 `json:"pr"`
+}
+
+type ResolveChannelInput struct {
+	Channel string `json:"channel"`
 
 	Channels map[string]struct {
 		Golden string `json:"golden"`
 
 		Provision string `json:"provision"`
-	} `json:"channels,omitempty"`
+	} `json:"channels"`
+}
 
-	Llm LLMSpec `json:"llm,omitempty"`
+type EvidenceAuditInput struct {
+	Dir string `json:"dir"`
 
-	Media MediaSpec `json:"media,omitempty"`
+	Files []any/* CUE closed list */ `json:"files"`
 
-	Report ReportSpec `json:"report,omitempty"`
+	Min map[string]int64 `json:"min"`
 
-	// skills: the agent-stage skill corpus. corpus is a dir holding
-	// <skill-name>/SKILL.md; it is REF-RESOLVED ($env.NAME / $workdir / ...)
-	// and a relative result is joined with the run workdir, so a lane can point
-	// at a generated corpus outside its own tree (e.g.
-	// $env.EVAL_UMBRELLA/marketplace/distros/skills). Every stage skill: ref
-	// names a skill in this corpus. An unresolvable ref FAILS the stage
-	// informatively — the decorative-ref era is gone.
-	Skills struct {
-		Corpus string `json:"corpus"`
-	} `json:"skills,omitempty"`
+	Trees []any/* CUE closed list */ `json:"trees"`
+}
 
-	Stages []Stage `json:"stages"`
+// The P1 agent runtime input (the standalone + stage op).
+type AgentRunInput struct {
+	System_prompt string `json:"system_prompt"`
+
+	Prompt string `json:"prompt"`
+
+	Skill []string `json:"skill,omitempty"`
+
+	Tools []string `json:"tools,omitempty"`
 }
 
 // ── The LLM surface (the OpenAI-compatible API) ─────────────────────────────
@@ -202,48 +273,41 @@ type LLMStreamOptions struct {
 	Include_usage *bool `json:"include_usage,omitempty"`
 }
 
-type MediaSpec struct {
-	Files []string `json:"files"`
-
-	Min map[string]int64 `json:"min"`
-
-	Dir string `json:"dir"`
+// #LLMNamedToolChoice — force one named function tool.
+type LLMNamedToolChoice struct {
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
-type ReportSpec struct {
-	Template string `json:"template"`
-
-	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
-
-	Bed_template string `json:"bed_template,omitempty"`
-
-	Control_bed_template string `json:"control_bed_template,omitempty"`
-}
-
-type Stage map[string]any
-
-// #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
-// cutover). Each declared output is a field name -> #OutputType; the runner
-// renders the contract into the prompt mechanically and validates the reply
-// against it at decode. skill: refs are SKILL NAMES in the entity's
-// skills.corpus.
+// ── Per-verb input shapes (the lifted-verb provider contract) ───────────────
 //
-// `cache` makes the agent's OUTPUT a COMMITTED ARTIFACT keyed by freshness: on a
-// hit (the file exists and its key_field equals `key`) the declared outputs are
-// READ from the file and the agent never runs; on a miss the agent runs normally.
-// That is the render-once-per-<key> primitive a lane needs to reuse a committed
-// plan (e.g. per pr@sha) instead of re-authoring it every run.
-// `llm` is the STAGE-LOCAL override of the entity's llm block: it sits between
-// the env override and the entity block in the field-wise precedence
-// (env > stage > entity > built-in default), so one stage can retarget the
-// model or tighten a sampling knob without disturbing its siblings. `llm.model`
-// is the common case (a cheap model for a mechanical stage); `llm.params`
-// overlays #LLMParams field-wise. A nil/absent block is a no-op.
-type AgentStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+// These are the per-verb input shapes for the six stage verbs (agent, probe,
+// ade, generate, emit, media) plus the deterministic gate. They are the input
+// contract of the ordinary `verb:` providers the stage bodies were lifted into,
+// and the migrator's frozen key spellings have a SINGLE source to agree on here.
+// #PipelineMediaInput.assemble is retained as a REQUIRED field even though no Go
+// reader consults it: the retired grammar declared it, and a field the old
+// grammar accepted is never silently dropped.
+//
+// WHY EVERY DEF HERE CARRIES THE `#Pipeline` PREFIX. The host splices EVERY
+// loaded plugin's served schema into ONE CUE instance (the loader appends each
+// served schema to the same value), and CUE UNIFIES two same-named defs instead
+// of erroring — so a plugin's def names share ONE GLOBAL namespace with every
+// OTHER plugin's. The load gate's splice detects a collision with the BASE only;
+// it does NOT detect plugin-vs-plugin. An un-prefixed `#AgentInput` here was
+// exactly that collision, and a silent one: plugin-agent is a RELEASED plugin
+// declaring `{Class: "kind", Word: "agent", InputDef: "#AgentInput"}` with an
+// incompatible shape (`command: [string, ...string]` + `prompt_via`), so the two
+// would have unified and rejected EVERY `agent: {prompt: …}` step with no error
+// at this seam. The prefix makes this plugin's seven defs collision-free by
+// construction. The loader-side class fix (namespace, or reject a plugin-vs-plugin
+// collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
+// added here takes the same prefix.
+//
+// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
+// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+type PipelineAgentInput struct {
 	Prompt string `json:"prompt"`
 
 	Skill []string `json:"skill,omitempty"`
@@ -254,63 +318,20 @@ type AgentStage struct {
 
 	Max_turns int64 `json:"max_turns,omitempty"`
 
-	Llm StageLLMSpec `json:"llm,omitempty"`
+	Llm LLMSpec `json:"llm,omitempty"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
 
-	Skip_when string `json:"skip_when,omitempty"`
-
 	Cache CacheSpec `json:"cache,omitempty"`
+
+	Repo string `json:"repo,omitempty"`
+
+	Skills struct {
+		Corpus string `json:"corpus"`
+	} `json:"skills,omitempty"`
 }
 
-type OutputType struct {
-	Type string `json:"type"`
-
-	Enum []string `json:"enum,omitempty"`
-
-	Description string `json:"description,omitempty"`
-}
-
-// #StageLLMSpec — the per-stage llm override: the endpoint knobs a stage may
-// retarget (model/base_url/api_key), plus a field-wise #LLMParams overlay.
-// timeout/idle_timeout/max_retries/headers/organization/project are
-// CONNECTION-level and intentionally NOT overridable per stage — one lane
-// speaks to one endpoint with one liveness policy.
-type StageLLMSpec struct {
-	Model string `json:"model,omitempty"`
-
-	Base_url string `json:"base_url,omitempty"`
-
-	Api_key string `json:"api_key,omitempty"`
-
-	Params LLMParams `json:"params,omitempty"`
-}
-
-type RedoSpec struct {
-	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
-
-	Triggers map[string]string `json:"triggers,omitempty"`
-
-	Max int64 `json:"max,omitempty"`
-
-	Escalate_after int64 `json:"escalate_after,omitempty"`
-}
-
-type CacheSpec struct {
-	Path string `json:"path"`
-
-	Key string `json:"key"`
-
-	Key_field string `json:"key_field,omitempty"`
-
-	Source string `json:"source,omitempty"`
-}
-
-type ProbeStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+type PipelineProbeInput struct {
 	Verbs []string `json:"verbs"`
 
 	Input map[string]any/* CUE top */ `json:"input,omitempty"`
@@ -319,41 +340,18 @@ type ProbeStage struct {
 
 	Redo RedoSpec `json:"redo,omitempty"`
 
-	Skip_when string `json:"skip_when,omitempty"`
+	Media MediaSpec `json:"media,omitempty"`
 }
 
-// #ProbeStage outputs: the probe's VALUE spreads as named outputs when it is a
-// map (e.g. ledger_gate -> executed_checks/control_ok/media_ok/eval_steps/
-// control_steps); a scalar value is exposed under the output named in `outputs`.
-// #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
-// evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
-// agent-check: steps, graded by the live agent in the venue via the SDK.
-type AdeStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+type PipelineAdeInput struct {
 	Bed string `json:"bed"`
 
 	Fail_on []string `json:"fail_on,omitempty"`
 
 	Redo RedoSpec `json:"redo,omitempty"`
-
-	Skip_when string `json:"skip_when,omitempty"`
 }
 
-// #GenerateStage: render an inline template to `out`. `negate_checks` negates
-// EVERY `checks` marker in the template. A per-marker transform
-// (`${checks:negate}`, `${checks:json}`, `${var:yaml}`, `${var:indent}`,
-// `${var:bullets}`) applies to that marker ALONE, so ONE template can render BOTH
-// the treatment bed and its negative-control twin (plus a structured record with
-// an indented multi-line report and bullet lists) into a single file. An unknown
-// transform is a HARD error — never a silent no-op.
-type GenerateStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+type PipelineGenerateInput struct {
 	Template string `json:"template"`
 
 	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
@@ -364,53 +362,10 @@ type GenerateStage struct {
 
 	Negate_checks bool `json:"negate_checks,omitempty"`
 
-	Skip_when string `json:"skip_when,omitempty"`
+	Report ReportSpec `json:"report,omitempty"`
 }
 
-// #EmitStage: the SCHEMA-FIRST artifact writer — the replacement for hand-written
-// YAML/JSON. Instead of rendering a free-form string template (which can emit
-// invalid YAML, as a `what: text: with-colon` scalar did before this existed),
-// `value` is assembled as a STRUCTURED value (the SAME ref grammar as `vars`),
-// validated against the authored CUE `schema` def BEFORE any bytes hit disk, and
-// only then marshalled to `out` (YAML by default). The record an agent or a lane
-// produces therefore CANNOT be malformed: a value that violates the schema fails
-// the stage informatively, exactly like an ingress kind body.
-//
-//	schema: one of THREE forms, each unified against `value` with Concreteness
-//	        required (an unknown or wrong-typed field is a stage failure, never a
-//	        silent drop):
-//	          1. a bare def NAME (`#StageFindings`) resolving in the plugin's own
-//	             served schema (schema/pipeline.cue);
-//	          2. a `.cue` FILE path (`candy/eval-pr/record.cue`, project-relative
-//	             to the run workdir) — the strongest form, a committed and
-//	             reviewable schema the project owns; a `#Def` suffix
-//	             (`record.cue#NotTestableRecord`) selects a def explicitly, a
-//	             bare path uses the file's first `#Def`;
-//	          3. a literal CUE source string (a self-contained def block).
-//	value:  a structured map assembled from refs (@stage.output, $pr, $env.NAME).
-//	        Every leaf resolves through the ref grammar; nested maps/lists are
-//	        resolved recursively (resolveValue), so `@oracle.checks` lands as a
-//	        real list of objects, not a stringified one.
-//	format: "yaml" (default) | "json".
-//
-//	vars:   OPTIONAL named values for string-leaf TEMPLATES. A string leaf that
-//	        contains `${name}` markers is rendered with the SHARED MARKER SYNTAX
-//	        but emit's OWN transform set — NOT generate's full set:
-//	          ${name}           scalar default (the value itself)
-//	          ${name:indent}    the value as-is (a multi-line prose block)
-//	          ${name:bullets}   a markdown bullet list (one line per element)
-//	          ${name:yaml}      the value rendered inline as JSON
-//	          ${name:json}      same as :yaml for a string leaf
-//	        `negate` is DELIBERATELY REJECTED (a string leaf has no check to
-//	        negate) and hard-errors like any other unknown transform. The RESULT
-//	        is a string leaf of the structured value, so the CUE encoder owns the
-//	        YAML quoting/block-scalar — which is what lets a prose field (the
-//	        user-voice report) be composed WITHOUT a hand-written YAML template.
-type EmitStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+type PipelineEmitInput struct {
 	Schema string `json:"schema"`
 
 	Value map[string]any/* CUE top */ `json:"value"`
@@ -423,133 +378,22 @@ type EmitStage struct {
 
 	Validate string `json:"validate,omitempty"`
 
-	Skip_when string `json:"skip_when,omitempty"`
+	Report ReportSpec `json:"report,omitempty"`
 }
 
-type MediaStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+// #PipelineMediaInput — dir/files are declared here because the Go reader consults them although the retired media stage did not declare them.
+type PipelineMediaInput struct {
 	Assemble bool `json:"assemble"`
 
 	Transcode string `json:"transcode,omitempty"`
 
-	Skip_when string `json:"skip_when,omitempty"`
+	Dir string `json:"dir,omitempty"`
+
+	Files []string `json:"files,omitempty"`
+
+	Media MediaSpec `json:"media,omitempty"`
 }
 
-type GateStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
+type PipelineGateInput struct {
 	Condition string `json:"condition"`
-
-	Skip_when string `json:"skip_when,omitempty"`
-}
-
-type CommandStage struct {
-	Kind string `json:"kind"`
-
-	Id string `json:"id"`
-
-	Command string `json:"command"`
-
-	Expect_exit int64 `json:"expect_exit,omitempty"`
-}
-
-// #StageFinding — one row of the per-run ledger dump (stage-findings.yml). The
-// dump is emitted schema-first (marshalled + validated), so it is always valid
-// YAML — a debug artifact no reader can parse is worthless.
-type StageFinding struct {
-	Stage string `json:"stage"`
-
-	Kind string `json:"kind"`
-
-	Status string `json:"status"`
-
-	Trigger string `json:"trigger,omitempty"`
-
-	Message string `json:"message,omitempty"`
-
-	// duration_seconds: the stage's wall-clock time. The runner has ALWAYS
-	// measured this (StageResult.Duration) but the dump DROPPED it, so the one
-	// artifact that could answer "where did the lane's 13 minutes go?" carried
-	// no timing at all. It is authored here so the dump is the timing record.
-	Duration_seconds int64 `json:"duration_seconds,omitempty"`
-
-	Outputs map[string]any/* CUE top */ `json:"outputs,omitempty"`
-}
-
-type StageFindings []StageFinding
-
-// Probe verb inputs (deterministic, engine-native).
-type MediaGateInput struct {
-	Dir string `json:"dir"`
-
-	Files []any/* CUE closed list */ `json:"files"`
-
-	Min map[string]int64 `json:"min"`
-}
-
-type LockAuditInput struct {
-	Trees []any /* CUE closed list */ `json:"trees"`
-}
-
-type SequencingInput struct {
-	Bed_prefix string `json:"bed_prefix"`
-
-	Golden string `json:"golden"`
-}
-
-type HeadFreshnessInput struct {
-	Plan_sha string `json:"plan_sha"`
-
-	Pr int64 `json:"pr"`
-
-	Repo string `json:"repo"`
-}
-
-type ConfigAuditInput struct {
-	Bed string `json:"bed"`
-
-	Pr int64 `json:"pr"`
-}
-
-type ResolveChannelInput struct {
-	Channel string `json:"channel"`
-
-	Channels map[string]struct {
-		Golden string `json:"golden"`
-
-		Provision string `json:"provision"`
-	} `json:"channels"`
-}
-
-type EvidenceAuditInput struct {
-	Dir string `json:"dir"`
-
-	Files []any/* CUE closed list */ `json:"files"`
-
-	Min map[string]int64 `json:"min"`
-
-	Trees []any/* CUE closed list */ `json:"trees"`
-}
-
-// The P1 agent runtime input (the standalone + stage op).
-type AgentRunInput struct {
-	System_prompt string `json:"system_prompt"`
-
-	Prompt string `json:"prompt"`
-
-	Skill []string `json:"skill,omitempty"`
-
-	Tools []string `json:"tools,omitempty"`
-}
-
-// #LLMNamedToolChoice — force one named function tool.
-type LLMNamedToolChoice struct {
-	Function struct {
-		Name string `json:"name"`
-	} `json:"function"`
 }

@@ -1,3 +1,581 @@
+# Makes this plugin repo a PROJECT so its own candy is actually gated: without a root
+# charly.yml the repo is "project-less", charly scans NO candies, and `charly box
+# validate` exits 0 on any manifest (opencharly/charly#459). This file also declares the
+# R10 witness bed (below).
 discover:
     - path: candy
       recursive: true
+
+# check-pipeline-app — the bed's local template. It composes this repo's own candy (the
+# front-end under test) plus the TASK engine that executes the tasks the lowering
+# generates (`charly -C <gen-dir> task <entity>`), pinned to the released plugin-task.
+#
+# The WORKFLOW engine (plugin-lobster) is NOT composed here: it carries no release tag
+# yet, and a pinned `@github…/candy/plugin-lobster:<ref>` ref that does not resolve makes
+# the bed unbuildable rather than strict. It is the pin to ADD the moment plugin-lobster
+# tags — the `pipeline-runs-builtin-verb-step` step below is its witness, and the R10 gate
+# runs these steps host-side against the `${CHARLY_BIN}` it built with every wave plugin
+# compiled in, so the engine leg is present there regardless.
+check-pipeline-app:
+    local:
+        description: >-
+            Minimal kind:local template for the check-pipeline-local bed — composes the
+            workflow front-end candy (candy/plugin-pipeline) under test plus the released
+            plugin-task, so the bed exercises `charly pipeline` host-side.
+        candy:
+            - plugin-pipeline
+            - '@github.com/opencharly/plugin-task/candy/plugin-task:v2026.276.1230'
+
+# check-pipeline-local — the R10 witness for the front-end: the hard cutover from the
+# retired home-grown pipeline grammar (a stage list / #*Stage / the in-process executor) to
+# the wave design — the authored entity is `spec.Pipeline` (`steps:`), validated by
+# sdk/workflowkit.ValidatePipeline, lowered by sdk/workflowkit.Lower to the
+# (workflow.lobster, charly.yml) pair, and dispatched to the `workflow` provider class as
+# workflow-run. Every step runs `${CHARLY_BIN}` host-side in a mktemp project, so the
+# front-end's OWN resolution/validation/lowering is what is being graded:
+#
+#   - the mixed-grammar fixture exercises all three authored grammars at once (a lobster
+#     shell arm, a flow key, and the loader's single-step `<word>: <input>` verb sugar);
+#   - the broken fixture proves the exec-arm XOR is NAMED, never a silent pass;
+#   - the generated charly.yml is inspected for the authored verb sugar — the regression
+#     this bed exists for is a plan step lowering to an EMPTY step (`- {}`) because the
+#     resolver skipped the loader's sugar desugar;
+#   - the run leg's TWO dispatch inputs are witnessed in both directions: a well-formed
+#     `--args-json`/`--mode` pair is accepted, while a malformed `--args-json` and an
+#     unsupported `--mode` are NAMED errors (the lowering emits `-p NAME="$NAME"` for
+#     every declared arg, so a dropped arg reaches the engine as an EMPTY value);
+#   - one step runs the whole pipeline through the engine;
+#   - the RESUME leg — the front-end subcommand that answers a gate the engine paused on — is
+#     witnessed for BOTH answers an approval takes: `--approve yes` carries the run to ok and
+#     `--approve no` to cancelled, which are not the same resume; for an INPUT gate's
+#     `--response-json` closing the loop back to a `$id.response.<path>` ref; and for its own
+#     usage refusal;
+#   - the SCHEDULE leg is witnessed through the UNIT DIRECTORY: `apply` writes both units,
+#     `list` reads them back out of that directory, and `remove` deletes them with the entry
+#     gone.
+#
+# MEASURED: this bed passes on the tree it ships in — 15 steps, 0 failed, 0 skipped. Its
+# engine leg needs a `${CHARLY_BIN}` carrying BOTH the `workflow` provider class (charly
+# >= v2026.277.0930) AND a workflow engine, which is what the R10 gate's own host supplies;
+# the front-end half needs nothing beyond this repo.
+check-pipeline-local:
+    local:
+        from: check-pipeline-app
+        host: local
+        disposable: true
+        lifecycle: dev
+        description: >-
+            The workflow front-end's R10 witness: `charly pipeline validate|run` resolves,
+            validates and lowers an authored `kind:pipeline` (spec.Pipeline, `steps:`) and
+            dispatches the lowered pair to the workflow engine — the hard cutover off the
+            retired stage-list/#*Stage in-process executor, proven on a disposable local deploy.
+        plan:
+            - check: a mixed-grammar pipeline (lobster shell arm + flow key + single-step verb sugar) validates through the shared workflowkit gate
+              id: pipeline-validate-mixed-grammar
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'mixed-plan: valid (2 steps)'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          when: $build.exit_code == 0
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate mixed-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a step carrying two execution arms is rejected with the NAMED exec-arm error, never a silent pass
+              id: pipeline-validate-rejects-two-arms
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: 'execution arms set'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  broken-plan:
+                    pipeline:
+                      description: two execution arms on one step
+                      steps:
+                        - id: s
+                          run: "true"
+                          pipeline: other
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate broken-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the lowering writes BOTH halves of the pair — workflow.lobster and the generated charly.yml — under .opencharly/pipelines/<entity>
+              id: pipeline-lower-writes-pair
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'dry-run OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
+                  rc=$?
+                  g="$d/.opencharly/pipelines/mixed-plan"
+                  test -s "$g/workflow.lobster" || rc=1
+                  test -s "$g/charly.yml" || rc=1
+                  grep -q 'name: mixed-plan' "$g/workflow.lobster" || rc=1
+                  grep -q 'task _pipeline-mixed-plan-verify' "$g/workflow.lobster" || rc=1
+                  rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the builtin-verb plan step lowers to a generated charly task carrying the AUTHORED verb sugar (not an empty step) and the generated file flat-imports the project charly.yml
+              id: pipeline-lowered-task-carries-verb-sugar
+              context:
+                - runtime
+              exit_status: 0
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
+                  rc=$?
+                  g="$d/.opencharly/pipelines/mixed-plan/charly.yml"
+                  grep -q '^_pipeline-mixed-plan-verify:' "$g" || rc=1
+                  grep -q 'run: grade the build result' "$g" || rc=1
+                  grep -q 'condition: "true"' "$g" || rc=1
+                  grep -q -- '- {}$' "$g" && rc=1
+                  grep -q 'import:' "$g" || rc=1
+                  rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a malformed --args-json is a NAMED error (never a silently-empty arg — the lowering emits -p NAME="$NAME" for every declared arg)
+              id: pipeline-run-rejects-malformed-args
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: '--args-json'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"n":3}' --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: an unsupported --mode is a NAMED error naming BOTH accepted values
+              id: pipeline-run-rejects-bad-mode
+              context:
+                - runtime
+              exit_status: 1
+              stderr:
+                - contains: 'accepted values are human, tool'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --mode banana --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: a well-formed --args-json/--mode pair is ACCEPTED and the lowering still stops before dispatch
+              id: pipeline-run-accepts-dispatch-flags
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'dry-run OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"who":"world"}' --mode tool --dry-run
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the whole pipeline runs through the workflow engine, so the builtin-verb plan step actually executes (dispatched as workflow-run to the `workflow` provider class)
+              id: pipeline-runs-builtin-verb-step
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'ran via workflow:lobster'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  mixed-plan:
+                    pipeline:
+                      description: a mixed-grammar plan
+                      steps:
+                        - id: build
+                          run: "true"
+                        - id: verify
+                          when: $build.exit_code == 0
+                          plan:
+                            - run: grade the build result
+                              gate:
+                                condition: "true"
+                  YAML
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan
+                  rc=$?; rm -rf "$d"; exit $rc
+                in_container: false
+            - check: the three DETERMINISTIC lifted verbs run through the engine — `generate` renders its template into `out`, `emit` validates against a literal CUE def and serializes, and `probe` reads a real artifact off disk (a negative control proves the probe really consults the filesystem)
+              id: pipeline-runs-lifted-file-verbs
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'lifted-verbs OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  lifted-verbs-plan:
+                    pipeline:
+                      description: three lifted verb bodies with deterministic artifacts
+                      # A lifted verb needs BOTH load gates satisfied, and each is its own
+                      # error: a verb KEY is not itself an execution arm ("no execution arm
+                      # — set exactly one of run/pipeline/.../plan/..."), and inside `plan:`
+                      # the step still needs an INTENT keyword ("plan[0] has no intent
+                      # keyword (run/check/agent-run/agent-check/include)"). So a lifted verb
+                      # is spelled as a plan step carrying an intent label AND the verb key,
+                      # exactly like the `gate:` step above — never as bare step-level sugar.
+                      steps:
+                        - id: render
+                          plan:
+                            - run: render the greeting
+                              generate:
+                                template: "hello ${who}"
+                                vars:
+                                  who: world
+                                out: "@OUTDIR@/rendered.txt"
+                        - id: emit
+                          plan:
+                            - run: emit the record
+                              emit:
+                                schema: '#Record: {name: string}'
+                                value:
+                                  name: rendered
+                                out: "@OUTDIR@/emitted.yml"
+                        - id: verify
+                          plan:
+                            - run: probe the emitted artifact on disk
+                              probe:
+                                verbs: [artifact]
+                                input:
+                                  path: "@OUTDIR@/emitted.yml"
+                                  min_bytes: 1
+                  lifted-verbs-negative:
+                    pipeline:
+                      description: the artifact probe must really consult the filesystem
+                      steps:
+                        - id: verify
+                          plan:
+                            - run: probe a path that does not exist
+                              probe:
+                                verbs: [artifact]
+                                input:
+                                  path: "@OUTDIR@/no-such-artifact"
+                  YAML
+                  sed -i "s|@OUTDIR@|$d|g" "$d/candy/x/charly.yml"
+                  rc=0
+                  # The routing lock in verb_reach_test.go pins ROUTING for these verbs only
+                  # (their bodies write files or read the host, so a unit test would need a
+                  # workdir) — this step is the live witness that the bodies themselves still
+                  # WORK, through a real `charly task` dispatch of the lowered pair.
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run lifted-verbs-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'ran via workflow:lobster — status=ok' "$d/run.out" || rc=1
+                  # generate: the INLINE template rendered the typed var, into the absolute out
+                  grep -q 'hello world' "$d/rendered.txt" || rc=1
+                  # emit: the value validated against the literal CUE source and serialized (yaml default)
+                  grep -q 'name: rendered' "$d/emitted.yml" || rc=1
+                  # probe's own NEGATIVE CONTROL — without it, a `probe` that returned pass
+                  # unconditionally would satisfy the step above just as well. A probe of a path
+                  # that does not exist must carry the run to error.
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run lifted-verbs-negative > "$d/neg.out" 2>&1 || rc=1
+                  grep -q 'ran via workflow:lobster — status=error' "$d/neg.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/neg.out" >&2; fi
+                  [ "$rc" -eq 0 ] && echo 'lifted-verbs OK'
+                  exit $rc
+                in_container: false
+            - check: the resume leg answers a paused APPROVAL — `pipeline run` reports needs_approval and leaves the gate handle, and `pipeline resume --approve yes` carries the SAME run to ok
+              id: pipeline-resume-approval-yes
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-approval-yes OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  gate-plan:
+                    pipeline:
+                      description: a plan that pauses on an approval
+                      steps:
+                        - id: ask
+                          approval: true
+                  YAML
+                  rc=0
+                  # `approval` is an EXECUTION ARM (the arms are run|pipeline|workflow|parallel|
+                  # for_each|input|plan|charly|approval), so a gate step carries it ALONE:
+                  # pairing it with `run:` is the "2 execution arms set" error pinned above.
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run gate-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'ran via workflow:lobster — status=needs_approval' "$d/run.out" || rc=1
+                  grep -q 'an approval is pending' "$d/run.out" || rc=1
+                  # the front-end records the gate handle BESIDE the lowered pair, which is what
+                  # lets `resume <name>` find the paused run without being handed a token
+                  # (cli.go: genDirOf + recordPending). Asserting the file asserts that the
+                  # writer (run) and the reader (resume) agree on ONE path.
+                  test -f "$d/.opencharly/pipelines/gate-plan/pending.json" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume gate-plan --approve yes > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=ok' "$d/res.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-approval-yes OK'
+                  exit $rc
+                in_container: false
+            - check: a paused approval answered `--approve no` carries the run to cancelled, not to ok — the two answers are not the same resume
+              id: pipeline-resume-approval-no
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-approval-no OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  gate-plan:
+                    pipeline:
+                      description: a plan that pauses on an approval
+                      steps:
+                        - id: ask
+                          approval: true
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run gate-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'status=needs_approval' "$d/run.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume gate-plan --approve no > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=cancelled' "$d/res.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-approval-no OK'
+                  exit $rc
+                in_container: false
+            - check: the same resume leg answers an INPUT gate — `--response-json` reaches the engine, the paused step's `$ask.response.<path>` resolves, and the run finishes
+              id: pipeline-resume-input-json
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-input-json OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  ask:
+                    pipeline:
+                      description: an input gate
+                      steps:
+                        - id: ask
+                          input:
+                            prompt: which branch?
+                            response_schema:
+                              type: object
+                              properties:
+                                branch:
+                                  type: string
+                              required:
+                                - branch
+                        - id: finish
+                          run: printf '%s' "$ask.response.branch" > answered.marker
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run ask > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'status=needs_input' "$d/run.out" || rc=1
+                  grep -q 'input is pending' "$d/run.out" || rc=1
+                  # the gate halted the run: nothing after the input step has run yet
+                  test ! -e "$d/answered.marker" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume ask --response-json '{"branch":"feature/x"}' > "$d/res.out" 2>&1 || rc=1
+                  grep -q 'resumed via workflow:lobster — status=ok' "$d/res.out" || rc=1
+                  # a RESUMED input answer is recorded as `response`, never as `json`
+                  # (engine.go applyResume: Response + HasResp), so `$ask.response.branch`
+                  # is the ref that resolves it — this marker is the proof the whole loop closed
+                  [ "$(cat "$d/answered.marker" 2>/dev/null)" = "feature/x" ] || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-input-json OK'
+                  exit $rc
+                in_container: false
+            - check: '`pipeline resume` with no entity is refused with its usage line, never a silent no-op'
+              id: pipeline-resume-requires-an-entity
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'resume-usage OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume > "$d/o" 2>&1 && rc=1
+                  grep -q 'pipeline resume <entity>' "$d/o" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/o" >&2; fi
+                  [ "$rc" -eq 0 ] && echo 'resume-usage OK'
+                  exit $rc
+                in_container: false
+            - check: the schedule leg drives the engine and its units are real and removable — `apply` writes both units, `list` names the pipeline and its timer, `remove` deletes them
+              id: pipeline-schedule-apply-list-remove
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'schedule-apply-list-remove OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); mkdir -p "$d/candy/x"
+                  # A per-run entity name, so a concurrent run of this bed cannot collide on the unit name
+                  # derived from it and cleanup can never remove someone else's timer. Lowercase ONLY: a
+                  # systemd unit name is lowercase, so the engine's derived unit name (and the pipeline name
+                  # `schedule list` reports back, which it reads off the unit) is the LOWERCASED entity — a
+                  # mixed-case entity name would never round-trip to the unit it produced.
+                  sfx=$(basename "$d" | tr -cd 'a-z0-9' | tail -c 13)
+                  name="sched-plan-$sfx"
+                  unitdir=$HOME/.config/systemd/user
+                  cleanup() {
+                    CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule remove "$name" >/dev/null 2>&1
+                    rm -f "$unitdir/charly-pipeline-$name-0.timer" "$unitdir/charly-pipeline-$name-0.service"
+                    rm -rf "$d"
+                  }
+                  trap cleanup EXIT
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<YAML
+                  $name:
+                    pipeline:
+                      description: a scheduled plan
+                      triggers:
+                        - schedule:
+                            cron: "13 3 * * *"
+                      steps:
+                        - id: s
+                          run: "true"
+                  YAML
+                  rc=0
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule apply "$name" > "$d/apply.out" 2>&1 || rc=1
+                  grep -q "charly-pipeline-$name-0.timer" "$d/apply.out" || rc=1
+                  grep -q "charly-pipeline-$name-0.service" "$d/apply.out" || rc=1
+                  # `list` answers FROM THE UNIT DIRECTORY (cli.go: list names no pipeline and lowers nothing),
+                  # so an entry here is a unit that is really on disk — that is the proof the units are REAL,
+                  # and it needs no filesystem path of this step's own. (A shell default written as a brace-dollar
+                  # with a `:-` fallback would be read by the check-variable scanner as an unresolvable env key and
+                  # SKIP this step silently, so no such default appears here.)
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule list > "$d/list.out" 2>&1 || rc=1
+                  grep -q "$name" "$d/list.out" || rc=1
+                  grep -q "timer=charly-pipeline-$name-0.timer" "$d/list.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule remove "$name" > "$d/rm.out" 2>&1 || rc=1
+                  grep -q "charly-pipeline-$name-0.timer" "$d/rm.out" || rc=1
+                  # removal is asserted the same way: the entry is GONE from the unit directory
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule list > "$d/list2.out" 2>&1 || rc=1
+                  grep -q "$name" "$d/list2.out" && rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/apply.out" "$d/list.out" "$d/rm.out" "$d/list2.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'schedule-apply-list-remove OK'
+                  exit $rc
+                in_container: false
+            - check: the schedule leg's refusals are NAMED — `run-now` on a timer that was never applied and an unknown op both error by name, never a silent success
+              id: pipeline-schedule-named-errors
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'schedule-named-errors OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  sfx=$(basename "$d" | tr -cd 'a-z0-9' | tail -c 13)  # lowercase: systemd unit names are
+                  name="sched-plan-$sfx"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<YAML
+                  $name:
+                    pipeline:
+                      description: a scheduled plan
+                      triggers:
+                        - schedule:
+                            cron: "13 3 * * *"
+                      steps:
+                        - id: s
+                          run: "true"
+                  YAML
+                  rc=0
+                  # no `apply` in this step, so the timer cannot be installed: the op must refuse
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule run-now "$name" > "$d/rn.out" 2>&1 && rc=1
+                  grep -q 'is not installed (apply first)' "$d/rn.out" || rc=1
+                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule bogus "$name" > "$d/uo.out" 2>&1 && rc=1
+                  grep -q 'unknown op' "$d/uo.out" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/rn.out" "$d/uo.out" >&2 2>/dev/null; fi
+                  [ "$rc" -eq 0 ] && echo 'schedule-named-errors OK'
+                  exit $rc
+                in_container: false

@@ -1,7 +1,6 @@
 package pluginpipeline
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,85 +66,8 @@ var emitPluginSchema = sync.OnceValues(func() (cue.Value, error) {
 	return v, nil
 })
 
-// runEmit implements the `emit` stage: assemble `value` (ref-resolved), validate
-// it against `schema`, then marshal to `out` (yaml by default).
-func (rc *runCtx) runEmit(raw map[string]any) error {
-	schema := s(raw["schema"])
-	if schema == "" {
-		return errString("emit: schema required (a CUE def name or a literal CUE source)")
-	}
-	out := rc.resolveRefs(s(raw["out"]))
-	if out == "" {
-		return errString("emit: out required")
-	}
-	if !filepath.IsAbs(out) {
-		out = filepath.Join(rc.workdir, out)
-	}
-
-	// 1. Assemble the structured value from the ref grammar. resolveValue keeps
-	//    the TYPE of every leaf (an array stays an array, a map a map), so the
-	//    CUE validation sees the real shape — never a stringified one. A string
-	//    leaf containing ${name} markers is a per-marker TEMPLATE rendered
-	//    against `vars` with the SHARED MARKER SYNTAX but emit's OWN transform
-	//    set (json/yaml/indent/bullets; a bare ${name} is the scalar default;
-	//    `negate` is rejected — see emitValidTransforms). The result is a
-	//    STRUCTURED string leaf, so the CUE encoder quotes it correctly.
-	vars := mm(raw["vars"])
-	value, err := rc.resolveEmitValue(anyMap(raw["value"]), vars)
-	if err != nil {
-		return err
-	}
-	valMap, ok := value.(map[string]any)
-	if !ok {
-		return errString("emit: value must be a mapping")
-	}
-
-	// 2. Compile the schema and marshal the assembled value — the ONE
-	//    schema-first writer shared with the internal ledger dump (R3): it
-	//    validates against the schema with Concreteness required BEFORE any
-	//    bytes exist.
-	schemaVal, err := emitSchema(rc.workdir, schema)
-	if err != nil {
-		return err
-	}
-	format := s(raw["format"])
-	if format == "" {
-		format = "yaml"
-	}
-	var body []byte
-	switch format {
-	case "yaml":
-		body, err = marshalSchemaFirst(schemaVal, valMap)
-		if err != nil {
-			return fmt.Errorf("emit: value violates %s: %w", schema, err)
-		}
-	case "json":
-		// JSON is a YAML subset: still validate against the schema FIRST, then
-		// marshal as JSON.
-		if _, err := marshalSchemaFirst(schemaVal, valMap); err != nil {
-			return fmt.Errorf("emit: value violates %s: %w", schema, err)
-		}
-		body, err = json.Marshal(valMap)
-		if err != nil {
-			return fmt.Errorf("emit: json encode: %w", err)
-		}
-	default:
-		return errString("emit: unknown format " + format + " (valid: yaml, json)")
-	}
-
-	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(out, body, 0o644); err != nil {
-		return err
-	}
-
-	// 3. The authored post-write validator (optional), same contract as generate.
-	if v := s(raw["validate"]); v != "" {
-		return runAuthoredValidator(rc, v)
-	}
-	return nil
-}
+// runEmit — the `emit` stage body — lives in verb_emit.go, its lifted verb: it
+// is registered as verb:emit and reachable from any plan.
 
 // resolveEmitValue is the `emit` stage's value resolver: like resolveValue, but a
 // string leaf containing ${var} markers is rendered as a TEMPLATE against vars
@@ -154,7 +76,7 @@ func (rc *runCtx) runEmit(raw map[string]any) error {
 // leaf without markers is plain ref-resolved. The RESULT is always a structured
 // string, so the CUE encoder owns YAML quoting — the difference from `generate`,
 // where the template IS the file.
-func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
+func (rc *verbEnv) resolveEmitValue(v any, vars map[string]any) (any, error) {
 	switch t := v.(type) {
 	case string:
 		// $report.<key> names a string in the entity's report: block (the prose
@@ -195,7 +117,7 @@ func (rc *runCtx) resolveEmitValue(v any, vars map[string]any) (any, error) {
 // reportRef resolves a `$report.<key>` reference to the entity report: block's
 // string value (the prose template). Mirrors the generate stage's `$report.X`
 // contract — one lookup, no duplication of the template machinery.
-func (rc *runCtx) reportRef(ref string) (string, bool) {
+func (rc *verbEnv) reportRef(ref string) (string, bool) {
 	if !strings.HasPrefix(ref, "$report.") || rc.report == nil {
 		return "", false
 	}
@@ -220,7 +142,7 @@ func (rc *runCtx) reportRef(ref string) (string, bool) {
 // returning the marker unchanged would ship a corrupt artifact — exactly the
 // bug class this stage exists to remove. `@github...` candy refs stay literal
 // (the @-grammar would otherwise eat the prefix) and are NOT a var miss.
-func (rc *runCtx) renderStringLeaf(tmpl string, vars map[string]any) (string, error) {
+func (rc *verbEnv) renderStringLeaf(tmpl string, vars map[string]any) (string, error) {
 	var renderErr error
 	out := tmplRe.ReplaceAllStringFunc(tmpl, func(m string) string {
 		if renderErr != nil {

@@ -1,12 +1,15 @@
 # plugin-pipeline
 
-The generic agent/workflow engine for OpenCharly — **domain-neutral**. The plan
-executor (`charly pipeline run <entity>`), the bare agent runtime, deterministic
-probe verbs, and SDD CUE-first schemas. Any pipeline is a declared plan; an eval
-is one plan, any other agent workflow is another.
+The workflow front-end for OpenCharly — **domain-neutral**. `charly pipeline run
+<entity>` resolves and validates a declared `kind: pipeline` entity, lowers it to
+the `(workflow.lobster, charly.yml)` pair, and hands it to the `workflow` engine
+that executes it. Also: the bare agent runtime, deterministic probe verbs, and SDD
+CUE-first schemas. Any workflow is a declared pipeline; an eval is one pipeline,
+any other agent workflow is another.
 
 The plugin is an out-of-tree Go module served over go-plugin gRPC; it provides
-`command:pipeline`, `verb:pipeline`, and the `kind:pipeline` entity.
+`command:pipeline`, `verb:pipeline`, the `kind:pipeline` entity, and the seven
+lifted stage verbs.
 
 ## What it provides
 
@@ -14,20 +17,32 @@ The plugin is an out-of-tree Go module served over go-plugin gRPC; it provides
 |---|---|
 | `command:pipeline` | `charly pipeline run <entity>` and `charly pipeline agent` |
 | `verb:pipeline` | deterministic probe verbs |
-| `kind:pipeline` | the `kind: pipeline` entity |
+| `kind:pipeline` | the `kind: pipeline` entity (`steps:`, validated by `sdk/workflowkit`) |
+| `verb:agent` … `verb:gate` | the seven lifted stage verbs |
 
-- **`charly pipeline run <entity>`** — execute a `kind: pipeline` entity from
-  `charly.yml`: stages (`agent`/`probe`/`ade`/`generate`/`emit`/`media`/`gate`/
-  `command`), a per-run ledger, bounded redo with the loop guard, FAIL-HARD, and
-  the reference grammar (`$pr` / `$calver` / `$workdir` / `$env.NAME` /
-  `@stage.output`).
+- **`charly pipeline run <entity>`** — resolve a `kind: pipeline` entity from
+  `charly.yml`, validate it with `sdk/workflowkit.ValidatePipeline`, lower it with
+  `sdk/workflowkit.Lower` to `workflow.lobster` + a generated `charly.yml`, and
+  dispatch the pair to the `workflow` provider class as `workflow-run`. The
+  ENGINE owns execution, control flow, redo, and iteration. `--dry-run` validates
+  and lowers without dispatching. The two dispatch inputs travel on the request:
+  `--args-json <json-object>` carries the pipeline's declared args as an object of
+  string values (a malformed value is a named error, never a silently-empty arg),
+  and `--mode human|tool` selects the engine's envelope (absent leaves the engine's
+  own default in place). The reference grammar (`$pr` / `$calver` /
+  `$workdir` / `$env.NAME`) is resolved by the engine and by each verb body's
+  template.
 - **`charly pipeline agent`** — the bare runtime: direct chat-completions with a
   fully configurable system prompt, skills appended from the candies (`@github`
   refs), tools by reference.
 - **`verb:pipeline`** — deterministic probes: `media_gate`, `lock_audit`,
   `sequencing`, `head_freshness`, `config_audit`, `golden_present`, `lanes_ok`,
   `resolve_channel`.
-- **SDD** — `schema/pipeline.cue` is the single source; `task cue:gen` emits
+- **`verb:agent` / `verb:probe` / `verb:ade` / `verb:generate` / `verb:emit` /
+  `verb:media` / `verb:gate`** — the seven stage bodies as ordinary verbs, each
+  reachable as a `<word>: <input>` step from any plan.
+- **SDD** — `schema/pipeline.cue` is the single source for the per-verb input
+  shapes; `task cue:gen` emits
   `params/cue_types_gen.go` (committed, CI-reproducible); every authored input is
   validated at load.
 
@@ -46,10 +61,13 @@ validator has no `pipeline` verb and no eval lane.
 ## Layout
 
 - `candy/plugin-pipeline/` — the plugin module: `plugin.go`, `cli.go`,
-  `executor.go`, `agent.go`, `probes.go`, `render.go`, `schema/pipeline.cue`,
-  `params/cue_types_gen.go`, and `cmd/serve/main.go`.
-- `charly.yml` — the root project manifest (`discover: candy`) + the embedded
-  `pipeline-skill:` skill entity.
+  `entity.go`, `verb_env.go`, `refs.go`, the lifted verb bodies
+  (`verb_agent.go`, `verb_probe.go`, `verb_ade.go`, `verb_generate.go`,
+  `verb_emit.go`, `verb_media.go`, `verb_gate.go`), `agent.go`, `probes.go`,
+  `render.go`, `ade.go`, `emit.go`, `media.go`, `llm.go`, `tools.go`,
+  `schema/pipeline.cue`, `params/cue_types_gen.go`, and `cmd/serve/main.go`.
+- `charly.yml` — the root project manifest (`discover: candy`); the embedded
+  `pipeline-skill:` skill entity lives in `candy/plugin-pipeline/charly.yml`.
 - `.github/workflows/ci.yml` — the repo's own `gofmt`/`vet`/`test` + generated-
   params-reproducibility job.
 - `.github/workflows/tag-on-merge.yml` — CalVer tag + `CHANGELOG/` on merge.

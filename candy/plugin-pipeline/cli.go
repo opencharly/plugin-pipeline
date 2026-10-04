@@ -2,26 +2,54 @@ package pluginpipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/opencharly/sdk"
+	"github.com/opencharly/sdk/workflowkit"
+	"github.com/opencharly/spec/ops"
+	"github.com/opencharly/spec/spec"
 )
 
 // runCLI: the command:pipeline surface (OpRun args).
 //
-//	pipeline run <entity> [--pr N] [--calver X] [--workdir DIR]
+//	pipeline run <entity> [--dry-run] [--args-json <json-object>] [--mode human|tool]
+//	pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]
+//	pipeline schedule <apply|list|remove|run-now> [<entity>]
 //	pipeline validate <entity>
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
 //	pipeline --self-test
+//
+// `run` is the FRONT-END leg: it resolves the entity, validates it with
+// sdk/workflowkit, lowers it to the (workflow.lobster, charly.yml) pair, and
+// dispatches the pair to the `workflow` provider class as OpWorkflowRun. The
+// engine (plugin-lobster today) owns execution; this command never runs a step
+// itself. `--dry-run` stops after the lowering (validate + lower, no dispatch).
+//
+// `resume` is the FRONT-END leg of answering a gate the engine paused on, and it
+// dispatches OpWorkflowResume with the SAME envelope shape `run` documents: the
+// approval decision is TRI-STATE on the wire (`approve` absent | false | true), so
+// `--approve no` sends `"approve": false` — a REJECTION — while passing no approval
+// flag at all sends no decision, which the engine refuses BY NAME rather than reading
+// as a rejection. `--cancel` is an ABORT and is deliberately a different arm from
+// either. When neither `--token` nor `--id` is given, the handle the interrupted `run`
+// recorded in the run's gen dir is used, so `resume <name> --approve yes` works without
+// the caller copying a token out of the run output.
+//
+// The run leg's dispatch inputs — `--args-json` (the pipeline's declared args) and
+// `--mode human|tool` — are parsed and validated up front, so a malformed flag is a
+// named error in EVERY mode instead of being silently accepted by the path that does
+// not consume it. Both are documented on workflowRunParams.
 func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	mode := ""
 	var rest []string
 	for _, a := range args {
 		switch a {
-		case "run", "validate", "agent", "probe":
+		case "run", "validate", "agent", "probe", "resume", "schedule":
 			mode = a
 		default:
 			rest = append(rest, a)
@@ -30,10 +58,10 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	switch mode {
 	case "":
 		if has(args, "--self-test") {
-			fmt.Println("pipeline self-test: ok (executor + agent runtime present)")
+			fmt.Println("pipeline self-test: ok (workflow front-end + agent runtime present)")
 			return 0, nil
 		}
-		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe")
+		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe|resume|schedule")
 	case "validate":
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline validate <entity>")
@@ -42,44 +70,177 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		fmt.Printf("pipeline %s: valid (%d stages)\n", rest[0], len(p.Stages))
+		fmt.Printf("pipeline %s: valid (%d steps)\n", rest[0], len(p.Steps))
 		return 0, nil
 	case "run":
-		// --dry-run (plan row 8): validate the entity + resolve every declared
-		// env ref, then stop without executing.
-		if flagAfter(rest, "--dry-run") != "" || has(rest, "--dry-run") {
-			p, derr := loadEntity(rest[0])
-			if derr != nil {
-				return 1, derr
-			}
-			env := envMap()
-			missing := []string{}
-			for _, k := range envRefs(p) {
-				if _, ok := env[k]; !ok {
-					missing = append(missing, k)
-				}
-			}
-			if len(missing) > 0 {
-				return 1, fmt.Errorf("pipeline dry-run: unresolvable env refs: %v", missing)
-			}
-			fmt.Println("pipeline", rest[0], "dry-run OK, env refs:", len(envRefs(p)), "stages:", len(p.Stages))
-			return 0, nil
-		}
-
 		if len(rest) == 0 {
-			return 2, fmt.Errorf("pipeline run <entity> [--pr N] [--prs a b c]")
+			return 2, fmt.Errorf("pipeline run <entity>")
 		}
 		p, err := loadEntity(rest[0])
 		if err != nil {
 			return 1, err
 		}
-		calver := flagAfter(rest, "--calver")
-		workdir := flagAfter(rest, "--workdir")
-		// the charly-native BATCH: --prs a b c runs the SAME entity per PR,
-		// sequencing-gated + venue-cleaned between lanes (the check stage's
-		// teardown handles the VMs; the sequencing gate blocks while a batch
-		// VM lives) — no external loop scripts.
-		return runBatch(rest, p, calver, workdir, ex)
+		name := rest[0]
+		genDir := genDirOf(name)
+		params, perr := workflowRunParams(name, genDir, rest)
+		if perr != nil {
+			return 1, perr
+		}
+		if err := os.MkdirAll(genDir, 0o755); err != nil {
+			return 1, err
+		}
+		lobsterYAML, charlyYAML, lerr := workflowkit.Lower(&p, projectDir(), genDir, charlyBin())
+		if lerr != nil {
+			return 1, lerr
+		}
+		if werr := os.WriteFile(filepath.Join(genDir, "workflow.lobster"), lobsterYAML, 0o644); werr != nil {
+			return 1, werr
+		}
+		if werr := os.WriteFile(filepath.Join(genDir, "charly.yml"), charlyYAML, 0o644); werr != nil {
+			return 1, werr
+		}
+		if has(rest, "--dry-run") {
+			fmt.Printf("pipeline %s: dry-run OK — lowered %d steps to %s (workflow.lobster + charly.yml written, not dispatched)\n",
+				name, len(p.Steps), genDir)
+			return 0, nil
+		}
+		engine := p.Engine
+		if engine == "" {
+			engine = "lobster"
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline run %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowRun)
+		}
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
+			return 1, fmt.Errorf("pipeline run %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowRun, ierr)
+		}
+		var reply spec.WorkflowRunReply
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &reply)
+		}
+		if rerr := recordPending(genDir, &reply); rerr != nil {
+			return 1, rerr
+		}
+		if reply.Status != "" {
+			fmt.Printf("pipeline %s: ran via workflow:%s — status=%s\n", name, engine, reply.Status)
+		} else {
+			fmt.Printf("pipeline %s: ran via workflow:%s\n", name, engine)
+		}
+		// `resume_token` is present exactly when status is needs_approval / needs_input
+		// (spec's own words on the envelope), so the status is what names the next move.
+		switch reply.Status {
+		case "needs_approval":
+			fmt.Printf("pipeline %s: an approval is pending — answer it with `charly pipeline resume %s --approve yes|no`\n", name, name)
+		case "needs_input":
+			fmt.Printf("pipeline %s: input is pending — answer it with `charly pipeline resume %s --response-json '{...}'`\n", name, name)
+		}
+		return 0, nil
+	case "resume":
+		if len(rest) == 0 {
+			return 2, fmt.Errorf("pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]")
+		}
+		name := rest[0]
+		p, err := loadEntity(name)
+		if err != nil {
+			return 1, err
+		}
+		params, perr := workflowResumeParams(name, rest)
+		if perr != nil {
+			return 1, perr
+		}
+		engine := p.Engine
+		if engine == "" {
+			engine = "lobster"
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline resume %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowResume)
+		}
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowResume, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
+			return 1, fmt.Errorf("pipeline resume %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowResume, ierr)
+		}
+		var reply spec.WorkflowRunReply
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &reply)
+		}
+		if rerr := recordPending(genDirOf(name), &reply); rerr != nil {
+			return 1, rerr
+		}
+		if reply.Status != "" {
+			fmt.Printf("pipeline %s: resumed via workflow:%s — status=%s\n", name, engine, reply.Status)
+		} else {
+			fmt.Printf("pipeline %s: resumed via workflow:%s\n", name, engine)
+		}
+		return 0, nil
+	case "schedule":
+		if len(rest) == 0 {
+			return 2, fmt.Errorf("pipeline schedule <apply|list|remove|run-now> [<entity>]")
+		}
+		sop := rest[0]
+		switch sop {
+		case "apply", "list", "remove", "run-now":
+		default:
+			return 2, fmt.Errorf("pipeline schedule %s: unknown op — want apply|list|remove|run-now", sop)
+		}
+		name := ""
+		if len(rest) > 1 {
+			name = rest[1]
+		}
+		engine := "lobster"
+		// `list` answers from the unit directory, so it names no pipeline and lowers
+		// nothing. Every other op names ONE pipeline; `apply` additionally WRITES the
+		// trigger descriptor the engine's own apply reads, because the front-end owns the
+		// lowering and therefore owns the triggers that lowering implies — the engine must
+		// never have to re-derive an authored trigger from the generated pair.
+		if sop != "list" {
+			if name == "" {
+				return 2, fmt.Errorf("pipeline schedule %s <entity>", sop)
+			}
+			p, lerr := loadEntity(name)
+			if lerr != nil {
+				return 1, lerr
+			}
+			if p.Engine != "" {
+				engine = p.Engine
+			}
+			if sop == "apply" {
+				genDir := genDirOf(name)
+				if merr := os.MkdirAll(genDir, 0o755); merr != nil {
+					return 1, merr
+				}
+				if werr := writeScheduleDescriptor(name, genDir, p.Triggers); werr != nil {
+					return 1, werr
+				}
+			}
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline schedule %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", sop, engine, ops.OpWorkflowSchedule)
+		}
+		params, merr := json.Marshal(spec.WorkflowScheduleRequest{Op: sop, Pipeline: name})
+		if merr != nil {
+			return 1, fmt.Errorf("pipeline schedule %s: encode request: %w", sop, merr)
+		}
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowSchedule, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
+			return 1, fmt.Errorf("pipeline schedule %s: workflow:%s %s: %w", sop, engine, ops.OpWorkflowSchedule, ierr)
+		}
+		var sreply spec.WorkflowScheduleReply
+		if len(raw) > 0 {
+			if uerr := json.Unmarshal(raw, &sreply); uerr != nil {
+				return 1, fmt.Errorf("pipeline schedule %s: decode reply: %w", sop, uerr)
+			}
+		}
+		for _, u := range sreply.Units {
+			fmt.Println(u)
+		}
+		for _, e := range sreply.Entries {
+			fmt.Printf("%s\ttimer=%s\ton_calendar=%s\tactive=%t\tnext=%s\n", e.Pipeline, e.Timer, e.OnCalendar, e.Active, e.NextRun)
+		}
+		if sop == "list" && len(sreply.Entries) == 0 && len(sreply.Units) == 0 {
+			fmt.Println("pipeline schedule list: no scheduled pipelines")
+		}
+		return 0, nil
 	case "agent":
 		sys := flagAfter(rest, "--system-prompt")
 		prompt := flagAfter(rest, "--prompt")
@@ -112,6 +273,16 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	return 2, fmt.Errorf("pipeline: unknown mode %q", mode)
 }
 
+// charlyBin is the binary path the lowering bakes into every generated `run:`
+// (the engine drives generated charly tasks with `<charlyBin> -C <gen-dir> task
+// <entity>`). CHARLY_BIN overrides it; the default is the PATH-resolved charly.
+func charlyBin() string {
+	if b := os.Getenv("CHARLY_BIN"); b != "" {
+		return b
+	}
+	return "charly"
+}
+
 // CliMain: the OUT-OF-PROCESS CLI-mode entry (sdk.Main dual mode).
 func CliMain(args []string) int {
 	exit, err := runCLI(args, nil)
@@ -133,43 +304,6 @@ func has(args []string, f string) bool {
 	return false
 }
 
-// restAfter returns the args AFTER the named flag (for --prs a b c ...).
-func restAfter(args []string, name string) []string {
-	for i, a := range args {
-		if a == name {
-			out := []string{}
-			for _, x := range args[i+1:] {
-				if strings.HasPrefix(x, "--") {
-					break
-				}
-				out = append(out, x)
-			}
-			return out
-		}
-	}
-	return nil
-}
-
-// REMOVED: teardownVenue / teardownLaneBeds (the batch-level venue teardown).
-//
-// Venue lifecycle has ONE owner: the `ade` stage itself. `charly check run` is
-// invoked with `--keep-venue` (the evidence is collected from the live domain),
-// and runAdeBed's deferred destroyVenue tears it down on every exit path,
-// including an abort (`context.WithoutCancel`). A SECOND owner was a defect of
-// exactly the kind R3 forbids:
-//
-//   - it hardcoded the eval-omarchy golden entity and a
-//     `check-omarchy-pr-<pr>-vm`/`-vm-probe` domain scheme in the domain-neutral
-//     engine (the `-vm-probe` suffix matched no entity at all);
-//   - it resolved the bed refs against the PROCESS env (`envMap()`), not the
-//     lane's run context — the same per-lane-env break this change fixes in
-//     ade.go, so any `$env.*` bed ref resolved to the operator's value or
-//     empty and the destroy silently targeted the wrong name;
-//   - it used the signal-cancelled ctx, so it was skipped precisely in the
-//     abort scenario teardown exists for.
-//
-// The `ade` stage owns the venue; the batch does not duplicate the rule.
-
 func flagAfter(args []string, name string) string {
 	for i, a := range args {
 		if a == name && i+1 < len(args) {
@@ -177,4 +311,207 @@ func flagAfter(args []string, name string) string {
 		}
 	}
 	return ""
+}
+
+// workflowRunParams builds the OpWorkflowRun envelope the front-end dispatches to the
+// `workflow` provider class: the EXACT ParamsJson bytes the engine receives (one
+// builder, so the CLI cannot drift from the envelope it documents).
+//
+// The run leg carries TWO dispatch inputs, both consumed by the engine:
+//
+//   - `--args-json <json-object>` → WorkflowRunRequest.Args, an object of STRING
+//     values (the envelope field is typed `map[string]string`, not `any`). The
+//     lowering emits `-p NAME="$NAME"` for every declared arg, so an arg the
+//     front-end never passes reaches the engine as an EMPTY value; a malformed
+//     document or a non-string member is therefore a NAMED error here, never a
+//     silently-empty arg.
+//   - `--mode human|tool` → WorkflowRunRequest.Mode, which selects the engine's
+//     human/tool envelope. ABSENT leaves Mode empty ON PURPOSE: the engine owns its
+//     default, and a front-end default would silently override it.
+func workflowRunParams(name, genDir string, rest []string) ([]byte, error) {
+	args, mode, err := runDispatchFlags(name, rest)
+	if err != nil {
+		return nil, err
+	}
+	params, merr := json.Marshal(spec.WorkflowRunRequest{Pipeline: name, Args: args, Mode: mode, GenDir: genDir})
+	if merr != nil {
+		return nil, fmt.Errorf("pipeline run %s: encode request: %w", name, merr)
+	}
+	return params, nil
+}
+
+// runDispatchFlags parses and validates the run leg's dispatch flags out of rest.
+func runDispatchFlags(name string, rest []string) (map[string]string, string, error) {
+	var args map[string]string
+	if has(rest, "--args-json") {
+		raw := flagAfter(rest, "--args-json")
+		if uerr := json.Unmarshal([]byte(raw), &args); uerr != nil {
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: %v (want a JSON object of STRING values, e.g. '{\"who\":\"world\"}')", name, uerr)
+		}
+		if args == nil {
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: want a JSON object of STRING values, e.g. '{\"who\":\"world\"}' (got %q)", name, raw)
+		}
+	}
+	mode := ""
+	if has(rest, "--mode") {
+		mode = flagAfter(rest, "--mode")
+		if mode != "human" && mode != "tool" {
+			return nil, "", fmt.Errorf("pipeline run %s: --mode %q: accepted values are human, tool", name, mode)
+		}
+	}
+	return args, mode, nil
+}
+
+// genDirOf is the ONE definition of a pipeline's generated-state directory — the
+// lowering target `run` writes (workflow.lobster + charly.yml) and the place `resume`
+// looks for the gate handle. Two spellings of this path would let a resume read a
+// directory the run never wrote.
+func genDirOf(name string) string {
+	return filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+}
+
+// scheduleDescriptor is the front-end's half of the scheduler contract: the IR's own
+// trigger list, wrapped with the pipeline name so the file describes itself. The engine's
+// `workflow-schedule apply` reads exactly this shape out of the run's gen dir
+// (plugin-lobster, schedule.go), so the writer here and the reader there are ONE
+// contract — the front-end never makes the engine re-derive an authored trigger from the
+// generated pair, which carries no triggers at all.
+type scheduleDescriptor struct {
+	Pipeline string                 `json:"pipeline"`
+	Triggers []spec.WorkflowTrigger `json:"triggers"`
+}
+
+// writeScheduleDescriptor records the pipeline's triggers where the engine's
+// `workflow-schedule apply` looks for them.
+//
+// It is written at APPLY time, not at lowering time: the descriptor is a projection of
+// the AUTHORED entity, and the authored entity is what an operator has just edited. A
+// descriptor written at lowering would silently schedule the triggers of the last run,
+// so `apply` after a trigger edit would install units for a cron the operator has already
+// changed. `apply` is therefore self-contained — it loads, projects, writes, and only
+// then dispatches.
+func writeScheduleDescriptor(name, genDir string, trigs []spec.PipelineTrigger) error {
+	desc := scheduleDescriptor{Pipeline: name, Triggers: make([]spec.WorkflowTrigger, 0, len(trigs))}
+	for _, t := range trigs {
+		desc.Triggers = append(desc.Triggers, spec.WorkflowTrigger{
+			Manual: t.Manual,
+			Schedule: spec.WorkflowSchedule{
+				Cron:       t.Schedule.Cron,
+				Timezone:   t.Schedule.Timezone,
+				Args:       t.Schedule.Args,
+				Persistent: t.Schedule.Persistent,
+			},
+		})
+	}
+	body, merr := json.MarshalIndent(desc, "", "  ")
+	if merr != nil {
+		return fmt.Errorf("pipeline schedule apply %s: encode triggers: %w", name, merr)
+	}
+	body = append(body, '\n')
+	path := filepath.Join(genDir, "schedule.json")
+	if werr := os.WriteFile(path, body, 0o644); werr != nil {
+		return fmt.Errorf("pipeline schedule apply %s: write %s: %w", name, path, werr)
+	}
+	return nil
+}
+
+// pendingGate is the handle a paused run leaves behind so that a LATER, SEPARATE process
+// can answer its gate: `charly pipeline resume <name> …` is ordinarily run after the
+// `charly pipeline run <name>` that paused has already exited, so the token cannot be
+// carried in memory and has to be recorded on disk.
+type pendingGate struct {
+	ResumeToken string `json:"resumeToken"`
+	Status      string `json:"status"`
+}
+
+func pendingPath(genDir string) string { return filepath.Join(genDir, "pending.json") }
+
+// recordPending writes the paused gate's token into the run's gen dir, or CLEARS a stale
+// one when the reply carries no gate. Clearing matters: a token left from an earlier
+// paused run would otherwise be picked up by a later `resume <name>` and answer a gate
+// that no longer exists.
+func recordPending(genDir string, reply *spec.WorkflowRunReply) error {
+	if reply.ResumeToken == "" {
+		if err := os.Remove(pendingPath(genDir)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("pipeline: clear pending gate in %s: %w", genDir, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(genDir, 0o755); err != nil {
+		return err
+	}
+	b, merr := json.Marshal(pendingGate{ResumeToken: reply.ResumeToken, Status: reply.Status})
+	if merr != nil {
+		return merr
+	}
+	// 0o600: the token is a capability — it answers the gate it names.
+	return os.WriteFile(pendingPath(genDir), b, 0o600)
+}
+
+// readPendingToken resolves a pipeline NAME to the gate handle its last run recorded.
+// A missing handle is a NAMED error, never an empty token: an empty token would reach
+// the engine as "no handle" and be refused there with a message about tokens rather than
+// about the pipeline the caller actually named.
+func readPendingToken(genDir string) (string, error) {
+	b, err := os.ReadFile(pendingPath(genDir))
+	if err != nil {
+		return "", fmt.Errorf("no pending gate recorded in %s (run the pipeline first, or pass --token/--id): %w", genDir, err)
+	}
+	var g pendingGate
+	if uerr := json.Unmarshal(b, &g); uerr != nil {
+		return "", fmt.Errorf("pending gate in %s: %w", genDir, uerr)
+	}
+	if g.ResumeToken == "" {
+		return "", fmt.Errorf("no pending gate recorded in %s", genDir)
+	}
+	return g.ResumeToken, nil
+}
+
+// workflowResumeParams builds the OpWorkflowResume envelope — the mirror of
+// workflowRunParams, and the reason the CLI cannot drift from the envelope it documents.
+//
+// `--approve` is parsed into the TRI-STATE pointer, not a bool: `yes` → &true, `no` →
+// &false, and ABSENT → nil. That last case is the whole point of the wire change — a
+// caller that supplies no decision must be distinguishable from one that rejected, and
+// the engine refuses the former by name.
+func workflowResumeParams(name string, rest []string) ([]byte, error) {
+	req := spec.WorkflowResumeRequest{Pipeline: name, Token: flagAfter(rest, "--token"), Id: flagAfter(rest, "--id")}
+	if req.Token == "" && req.Id == "" {
+		tok, err := readPendingToken(genDirOf(name))
+		if err != nil {
+			return nil, err
+		}
+		req.Token = tok
+	}
+	if has(rest, "--approve") {
+		switch flagAfter(rest, "--approve") {
+		case "yes":
+			t := true
+			req.Approve = &t
+		case "no":
+			f := false
+			req.Approve = &f
+		default:
+			return nil, fmt.Errorf("pipeline resume %s: --approve %q: accepted values are yes, no", name, flagAfter(rest, "--approve"))
+		}
+	}
+	if has(rest, "--cancel") {
+		req.Cancel = true
+	}
+	if has(rest, "--response-json") {
+		raw := flagAfter(rest, "--response-json")
+		var resp map[string]any
+		if uerr := json.Unmarshal([]byte(raw), &resp); uerr != nil {
+			return nil, fmt.Errorf("pipeline resume %s: --response-json: %v (want a JSON object)", name, uerr)
+		}
+		if resp == nil {
+			return nil, fmt.Errorf("pipeline resume %s: --response-json: want a JSON object, got %q", name, raw)
+		}
+		req.Response = resp
+	}
+	params, merr := json.Marshal(req)
+	if merr != nil {
+		return nil, fmt.Errorf("pipeline resume %s: encode request: %w", name, merr)
+	}
+	return params, nil
 }

@@ -36,7 +36,7 @@ func TestEntityLLMPrecedence(t *testing.T) {
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL) // the endpoint must be the test server (reachability)
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	t.Setenv("EVAL_LLM_API_KEY", "env-key")
-	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model", Api_key: "entity-key"}}
+	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model", Api_key: "entity-key"}}
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
@@ -57,7 +57,7 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 	srv := startLLM(t, &seen)
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	t.Setenv("EVAL_LLM_MODEL", "entity-model") // the entity-layer model via the env passthrough
-	rc := &runCtx{llm: params.LLMSpec{}}       // no api_key anywhere
+	rc := &verbEnv{llm: params.LLMSpec{}}      // no api_key anywhere
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)

@@ -53,9 +53,7 @@ var toolCatalog = map[string][]toolFn{
 		fn("get_pr_meta", "PR metadata: title, state, draft, mergeable, head/base refs, file count."),
 	},
 	"ledger": {
-		fnArgs("stage_output", "Read a prior stage output from THIS RUN's ledger.", map[string]any{"stage": map[string]any{"type": "string", "description": "the stage id (e.g. triage, eval)"}}, []string{"stage"}),
 		fnArgs("run_outcomes", "The structured step outcomes of a bed's LATEST check run: every step's id, name, ok/fail/skip, and the run verdict. The tool resolves the latest run dir itself — never guess paths.", map[string]any{"bed": map[string]any{"type": "string", "description": "the bed entity name (e.g. check-omarchy-pr-10115-vm)"}}, []string{"bed"}),
-		fn("ledger_facts", "The structured ledger facts of THIS run: every prior stage's outputs (the triage plan, the eval verdict + summary, the control result)."),
 	},
 }
 
@@ -103,7 +101,7 @@ func buildTools(refs []string) []openai.ChatCompletionToolUnionParam {
 
 // ghClient is a PROCESS-WIDE lazily-built client (http.Client is concurrency-
 // safe; the client carries no per-lane state — the race lesson of RCA
-// 2026.252.2210 is about per-LANE state, which stays in the runCtx).
+// 2026.252.2210 is about per-LANE state, which stays in the verbEnv).
 var ghOnce sync.Once
 var ghClient *gh.Client
 
@@ -116,24 +114,20 @@ func ghc() *gh.Client {
 
 // dispatchTool executes one tool call. The argument string is the model's JSON
 // argument object for the tool's declared schema.
-func dispatchTool(name, arguments string, rc *runCtx) string {
+func dispatchTool(name, arguments string, rc *verbEnv) string {
 	switch name {
 	case "get_pr_diff", "get_pr_commits", "get_pr_thread", "get_pr_meta":
 		return prTool(name, rc)
-	case "stage_output":
-		return stageOutputTool(arguments, rc)
 	case "run_outcomes":
 		return runOutcomesTool(arguments, rc)
-	case "ledger_facts":
-		return ledgerFactsTool(rc)
 	}
 	return jsonStr(map[string]string{"error": "unknown tool"})
 }
 
-// prRef resolves the PR identity for the tools: the lane's own runCtx wins
+// prRef resolves the PR identity for the tools: the lane's own verbEnv wins
 // (per-lane, race-free), the process env is the CLI fallback only. The repo
 // is global (the eval target), never per-lane.
-func prRef(rc *runCtx) (pr, repo string) {
+func prRef(rc *verbEnv) (pr, repo string) {
 	// the ENTITY-authored repo wins: the plugin is served as an out-of-process
 	// executor subprocess whose env is the executor's declared contract, NOT the
 	// operator's shell env (RCA 2026.252.2233: EVAL_REPO never reached the
@@ -157,9 +151,9 @@ func prRef(rc *runCtx) (pr, repo string) {
 }
 
 // prTool: the four PR tools via ghkit — the canonical client. The lane
-// identity (pr/repo) comes from the runCtx; every failure carries the REAL
+// identity (pr/repo) comes from the verbEnv; every failure carries the REAL
 // diagnostic (the HTTP status + body), never a bare "failed".
-func prTool(name string, rc *runCtx) string {
+func prTool(name string, rc *verbEnv) string {
 	pr, repo := prRef(rc) // prRef returns (pr, repo) — the swapped assignment built /repos/10144/pulls/omacom/omarchy → the 404 mystery (RCA 2026.252.2250)
 	p, err := parseInt(pr)
 	if err != nil {
@@ -216,27 +210,10 @@ func headSHA(pr, repo string) string {
 	return s
 }
 
-// stageOutputTool: read a PRIOR stage's output from THIS RUN's ledger — the
-// run context, never a global (the RCA 2026.252.2210 ledger-race lesson).
-func stageOutputTool(arguments string, rc *runCtx) string {
-	var in struct {
-		Stage string `json:"stage"`
-	}
-	_ = json.Unmarshal([]byte(arguments), &in)
-	if in.Stage == "" {
-		return jsonStr(map[string]string{"error": "stage required"})
-	}
-	r, ok := rc.ledgerRef(in.Stage)
-	if !ok || r.Outputs == nil {
-		return jsonStr(map[string]string{"error": "stage " + in.Stage + " not in the ledger"})
-	}
-	return jsonStr(r.Outputs)
-}
-
 // runOutcomesTool: the structured step outcomes of a bed's LATEST check run.
 // The tool resolves the latest calver dir itself (.check/<bed>/<calver>/) —
 // the agent NEVER guesses paths (the 952-failure era is gone).
-func runOutcomesTool(arguments string, rc *runCtx) string {
+func runOutcomesTool(arguments string, rc *verbEnv) string {
 	var in struct {
 		Bed string `json:"bed"`
 	}
@@ -282,13 +259,4 @@ func runOutcomesTool(arguments string, rc *runCtx) string {
 		steps = append(steps, map[string]any{"name": st.Name, "status": status})
 	}
 	return jsonStr(map[string]any{"bed": in.Bed, "calver": latest, "steps": steps})
-}
-
-// ledgerFactsTool: the structured ledger facts of THIS run — the agent's
-// context injection, on demand.
-func ledgerFactsTool(rc *runCtx) string {
-	if rc == nil || rc.ledger == nil {
-		return jsonStr(map[string]string{"error": "no ledger"})
-	}
-	return jsonStr(map[string]string{"facts": rc.ledger.facts()})
 }

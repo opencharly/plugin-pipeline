@@ -11,7 +11,7 @@ import (
 func TestSkillCorpus_RefResolved(t *testing.T) {
 	umbrella := t.TempDir()
 	wd := t.TempDir()
-	rc := &runCtx{
+	rc := &verbEnv{
 		workdir: wd,
 		env:     map[string]string{"EVAL_UMBRELLA": umbrella},
 		skills:  map[string]any{"corpus": "$env.EVAL_UMBRELLA/marketplace/distros/skills"},
@@ -25,7 +25,7 @@ func TestSkillCorpus_RefResolved(t *testing.T) {
 
 func TestSkillCorpus_RelativeLiteralJoinsWorkdir(t *testing.T) {
 	wd := t.TempDir()
-	rc := &runCtx{
+	rc := &verbEnv{
 		workdir: wd,
 		env:     map[string]string{},
 		skills:  map[string]any{"corpus": "candy/eval-lane/skills"},
@@ -41,7 +41,7 @@ func TestSkillCorpus_RelativeLiteralJoinsWorkdir(t *testing.T) {
 // be expressed relative to the run workdir as well as to an $env var.
 func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
 	wd := t.TempDir()
-	rc := &runCtx{
+	rc := &verbEnv{
 		workdir: wd,
 		env:     map[string]string{},
 		skills:  map[string]any{"corpus": "$workdir/generated/skills"},
@@ -55,7 +55,7 @@ func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
 
 func TestSkillCorpus_AbsoluteLiteralUnchanged(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "corpus")
-	rc := &runCtx{workdir: t.TempDir(), env: map[string]string{}, skills: map[string]any{"corpus": abs}}
+	rc := &verbEnv{workdir: t.TempDir(), env: map[string]string{}, skills: map[string]any{"corpus": abs}}
 	if got := skillCorpus(rc); got != abs {
 		t.Fatalf("skillCorpus = %q, want the absolute %q unchanged", got, abs)
 	}

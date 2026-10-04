@@ -41,7 +41,7 @@ func captureLLM(t *testing.T, reply func(rw http.ResponseWriter), assert func(t 
 
 // runChat drives one chat() call against the mock with the given rc/stage and
 // asserts the reply is a text turn.
-func runChat(t *testing.T, rc *runCtx, stage *params.StageLLMSpec, srv *httptest.Server, want string) chatMsg {
+func runChat(t *testing.T, rc *verbEnv, stage *params.LLMSpec, srv *httptest.Server, want string) chatMsg {
 	t.Helper()
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	msg, err := chat(t.Context(), rc, stage, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
@@ -208,7 +208,7 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 	freq, pres := 0.1, 0.2
 	parallel, logprobs := true, false
 
-	rc := &runCtx{llm: params.LLMSpec{Params: params.LLMParams{
+	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
 		Temperature:           &temp,
 		Top_p:                 &topP,
 		Max_tokens:            &maxTok,
@@ -277,7 +277,7 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 // TestConformance_JsonSchemaResponseFormat: a json_schema response_format is
 // rendered as the OpenAI json_schema object (not just json_object).
 func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
-	rc := &runCtx{llm: params.LLMSpec{Params: params.LLMParams{
+	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
 		Response_format: func() params.LLMResponseFormat {
 			rf := params.LLMResponseFormat{Type: "json_schema"}
 			rf.Json_schema.Name = "verdict"
@@ -311,10 +311,10 @@ func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
 func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 	temp, topP := 0.9, 0.5
 	stageTemp := 0.1
-	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model", Params: params.LLMParams{
+	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model", Params: params.LLMParams{
 		Temperature: &temp, Top_p: &topP,
 	}}}
-	stage := &params.StageLLMSpec{
+	stage := &params.LLMSpec{
 		Model:  "stage-model",
 		Params: params.LLMParams{Temperature: &stageTemp},
 	}
@@ -337,8 +337,8 @@ func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 // authored layers (the documented operator override).
 func TestConformance_EnvBeatsStageAndEntity(t *testing.T) {
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
-	rc := &runCtx{llm: params.LLMSpec{Model: "entity-model"}}
-	stage := &params.StageLLMSpec{Model: "stage-model"}
+	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model"}}
+	stage := &params.LLMSpec{Model: "stage-model"}
 	resolved, err := resolveLLM(rc, stage)
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +388,7 @@ func TestConformance_HeadersReachTheWire(t *testing.T) {
 		writeSSEContent(rw, "ok")
 	}))
 	defer srv.Close()
-	rc := &runCtx{llm: params.LLMSpec{Headers: map[string]string{"HTTP-Referer": "https://example.test"}}}
+	rc := &verbEnv{llm: params.LLMSpec{Headers: map[string]string{"HTTP-Referer": "https://example.test"}}}
 	runChat(t, rc, nil, srv, "ok")
 	if gotReferer != "https://example.test" {
 		t.Errorf("custom header not applied, got %q", gotReferer)
@@ -399,7 +399,7 @@ func TestConformance_HeadersReachTheWire(t *testing.T) {
 // #LLMSpec resolve as authored.
 func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 	retries := int64(0)
-	rc := &runCtx{llm: params.LLMSpec{
+	rc := &verbEnv{llm: params.LLMSpec{
 		Timeout:      "90s",
 		Idle_timeout: "45s",
 		Max_retries:  &retries,
@@ -422,7 +422,7 @@ func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 // TestConformance_ExtraEscapeHatchIsOrdered: the `extra` map reaches the wire as
 // documented request fields (the ONLY legal unknown-key path).
 func TestConformance_ExtraEscapeHatchIsOrdered(t *testing.T) {
-	rc := &runCtx{llm: params.LLMSpec{Params: params.LLMParams{
+	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
 		Extra: map[string]any{"z_knob": 1, "a_knob": "x"},
 	}}}
 	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "ok") },
@@ -451,7 +451,7 @@ func TestToSpecLLM_PropagatesErrors(t *testing.T) {
 	if err != nil || e.Model != "m" {
 		t.Fatalf("entity bridge: %v model=%q", err, e.Model)
 	}
-	st, err := toSpecLLM(params.StageLLMSpec{Model: "s"})
+	st, err := toSpecLLM(params.LLMSpec{Model: "s"})
 	if err != nil || st.Model != "s" {
 		t.Fatalf("stage bridge: %v model=%q", err, st.Model)
 	}
@@ -493,7 +493,7 @@ func TestChatVision_AdapterDrivesTheSharedClient(t *testing.T) {
 		})
 
 	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
-	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	rc := &verbEnv{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	got, err := chatVision(t.Context(), rc, nil, "what is this?", []string{img})
 	if err != nil {
@@ -512,7 +512,7 @@ func TestChatVision_AdapterPropagatesBridgeError(t *testing.T) {
 		rw.WriteHeader(http.StatusInternalServerError)
 		_, _ = rw.Write([]byte(`{"error":{"message":"boom"}}`))
 	}, nil)
-	rc := &runCtx{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
+	rc := &verbEnv{env: map[string]string{"EVAL_LLM_BASE_URL": srv.URL}}
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	img := llmkit.ImageDataURL("image/png", []byte("PNGDATA"))
 	if _, err := chatVision(t.Context(), rc, nil, "q", []string{img}); err == nil {

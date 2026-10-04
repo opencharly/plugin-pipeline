@@ -94,7 +94,7 @@ func TestLive_OllamaAuthoredParams(t *testing.T) {
 
 	temp := 0.1
 	maxTok := int64(64)
-	rc := &runCtx{llm: params.LLMSpec{
+	rc := &verbEnv{llm: params.LLMSpec{
 		Base_url:     liveBaseURL,
 		Model:        liveModel(),
 		Idle_timeout: "3m",

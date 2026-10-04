@@ -3,150 +3,35 @@
 // splices onto the host base. cue:gen (wrapped with package params + @go(params))
 // emits params/cue_types_gen.go; the provider serves this over Describe so every
 // authored kind:pipeline entity body and probe input is validated at load.
-
-// The kind:pipeline ENTITY body (a declared plan).
-#PipelineInput: {
-	version?: int & >0
-	repo?:   string // the eval TARGET repo (the pr tools' gh target) — authored on the entity; the env is the CLI fallback only
-	gates?: [...string]
-	redo?: { max?: int, escalate_after?: int }
-	concurrency?: { lanes?: int & >0 }
-	channels?: { [string]: { golden: string, provision: string } }
-	llm?: #LLMSpec
-	media?: #MediaSpec
-	report?: #ReportSpec
-	// skills: the agent-stage skill corpus. corpus is a dir holding
-	// <skill-name>/SKILL.md; it is REF-RESOLVED ($env.NAME / $workdir / ...)
-	// and a relative result is joined with the run workdir, so a lane can point
-	// at a generated corpus outside its own tree (e.g.
-	// $env.EVAL_UMBRELLA/marketplace/distros/skills). Every stage skill: ref
-	// names a skill in this corpus. An unresolvable ref FAILS the stage
-	// informatively — the decorative-ref era is gone.
-	skills?: { corpus: string }
-	stages: [#Stage, ...#Stage]
-}
-#Stage: #AgentStage | #ProbeStage | #AdeStage | #GenerateStage | #EmitStage | #MediaStage | #GateStage | #CommandStage
-// #AgentStage: TYPED outputs (the untyped [...string] form is REMOVED — hard
-// cutover). Each declared output is a field name -> #OutputType; the runner
-// renders the contract into the prompt mechanically and validates the reply
-// against it at decode. skill: refs are SKILL NAMES in the entity's
-// skills.corpus.
 //
-// `cache` makes the agent's OUTPUT a COMMITTED ARTIFACT keyed by freshness: on a
-// hit (the file exists and its key_field equals `key`) the declared outputs are
-// READ from the file and the agent never runs; on a miss the agent runs normally.
-// That is the render-once-per-<key> primitive a lane needs to reuse a committed
-// plan (e.g. per pr@sha) instead of re-authoring it every run.
-// `llm` is the STAGE-LOCAL override of the entity's llm block: it sits between
-// the env override and the entity block in the field-wise precedence
-// (env > stage > entity > built-in default), so one stage can retarget the
-// model or tighten a sampling knob without disturbing its siblings. `llm.model`
-// is the common case (a cheap model for a mechanical stage); `llm.params`
-// overlays #LLMParams field-wise. A nil/absent block is a no-op.
-#AgentStage:   { kind: "agent",    id: string, prompt: string, skill?: [...string], tools?: [...string], outputs?: { [string]: #OutputType }, max_turns?: int & >0, llm?: #StageLLMSpec, redo?: #RedoSpec, skip_when?: string, cache?: #CacheSpec }
-// #StageLLMSpec — the per-stage llm override: the endpoint knobs a stage may
-// retarget (model/base_url/api_key), plus a field-wise #LLMParams overlay.
-// timeout/idle_timeout/max_retries/headers/organization/project are
-// CONNECTION-level and intentionally NOT overridable per stage — one lane
-// speaks to one endpoint with one liveness policy.
-#StageLLMSpec: {
-	model?:    string
-	base_url?: string
-	api_key?:  string
-	params?:   #LLMParams
+// The kind:pipeline ENTITY body itself is spec.Pipeline (`steps:`), declared in
+// spec/schema/pipeline.cue and validated by sdk/workflowkit.ValidatePipeline. This
+// file no longer declares it: the front-end lowers the authored entity with
+// sdk/workflowkit.Lower and dispatches it to the `workflow` provider class.
+
+// #OutputType: the typed-output contract an agent stage declares per output field.
+#OutputType: {
+	type: "string" | "int" | "bool" | "enum" | "string_list" | "object"
+	enum?: [...string]      // type: "enum" — the allowed values
+	description?: string    // rendered into the prompt contract
 }
+
+// #RedoSpec: the per-stage redo/retry policy.
+#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string}, max?: int & >0, escalate_after?: int & >0 }
+
+// #CacheSpec: the committed-artifact cache for an agent's output, keyed by freshness.
 #CacheSpec: {
 	path:       string  // ref-resolved path to the committed plan artifact (YAML)
 	key:        string  // ref-resolved freshness value (e.g. $env.PR_HEAD_SHA)
 	key_field?: string  // the file field compared to key (default "head")
 	source?:    string  // the sub-tree whose fields ARE the outputs (default: top level)
 }
-#OutputType: {
-	type: "string" | "int" | "bool" | "enum" | "string_list" | "object"
-	enum?: [...string]      // type: "enum" — the allowed values
-	description?: string    // rendered into the prompt contract
-}
-#ProbeStage:   { kind: "probe",    id: string, verbs: [string, ...string], input?: {[string]: _}, outputs?: [...string], redo?: #RedoSpec, skip_when?: string }
-// #ProbeStage outputs: the probe's VALUE spreads as named outputs when it is a
-// map (e.g. ledger_gate -> executed_checks/control_ok/media_ok/eval_steps/
-// control_steps); a scalar value is exposed under the output named in `outputs`.
-// #CheckStage is REMOVED: the custom bed-runner stage is gone. The org-wide
-// evaluation is the ADE surface (#AdeStage): the bed's plan carries the oracle's
-// agent-check: steps, graded by the live agent in the venue via the SDK.
-#AdeStage:     { kind: "ade",     id: string, bed: string, fail_on?: [...string], redo?: #RedoSpec, skip_when?: string }
-// #GenerateStage: render an inline template to `out`. `negate_checks` negates
-// EVERY `checks` marker in the template. A per-marker transform
-// (`${checks:negate}`, `${checks:json}`, `${var:yaml}`, `${var:indent}`,
-// `${var:bullets}`) applies to that marker ALONE, so ONE template can render BOTH
-// the treatment bed and its negative-control twin (plus a structured record with
-// an indented multi-line report and bullet lists) into a single file. An unknown
-// transform is a HARD error — never a silent no-op.
-#GenerateStage: { kind: "generate", id: string, template: string, vars?: {[string]: _}, out: string, validate?: string, negate_checks?: bool, skip_when?: string }
-// #EmitStage: the SCHEMA-FIRST artifact writer — the replacement for hand-written
-// YAML/JSON. Instead of rendering a free-form string template (which can emit
-// invalid YAML, as a `what: text: with-colon` scalar did before this existed),
-// `value` is assembled as a STRUCTURED value (the SAME ref grammar as `vars`),
-// validated against the authored CUE `schema` def BEFORE any bytes hit disk, and
-// only then marshalled to `out` (YAML by default). The record an agent or a lane
-// produces therefore CANNOT be malformed: a value that violates the schema fails
-// the stage informatively, exactly like an ingress kind body.
-//
-//   schema: one of THREE forms, each unified against `value` with Concreteness
-//           required (an unknown or wrong-typed field is a stage failure, never a
-//           silent drop):
-//             1. a bare def NAME (`#StageFindings`) resolving in the plugin's own
-//                served schema (schema/pipeline.cue);
-//             2. a `.cue` FILE path (`candy/eval-pr/record.cue`, project-relative
-//                to the run workdir) — the strongest form, a committed and
-//                reviewable schema the project owns; a `#Def` suffix
-//                (`record.cue#NotTestableRecord`) selects a def explicitly, a
-//                bare path uses the file's first `#Def`;
-//             3. a literal CUE source string (a self-contained def block).
-//   value:  a structured map assembled from refs (@stage.output, $pr, $env.NAME).
-//           Every leaf resolves through the ref grammar; nested maps/lists are
-//           resolved recursively (resolveValue), so `@oracle.checks` lands as a
-//           real list of objects, not a stringified one.
-//   format: "yaml" (default) | "json".
-//
-//   vars:   OPTIONAL named values for string-leaf TEMPLATES. A string leaf that
-//           contains `${name}` markers is rendered with the SHARED MARKER SYNTAX
-//           but emit's OWN transform set — NOT generate's full set:
-//             ${name}           scalar default (the value itself)
-//             ${name:indent}    the value as-is (a multi-line prose block)
-//             ${name:bullets}   a markdown bullet list (one line per element)
-//             ${name:yaml}      the value rendered inline as JSON
-//             ${name:json}      same as :yaml for a string leaf
-//           `negate` is DELIBERATELY REJECTED (a string leaf has no check to
-//           negate) and hard-errors like any other unknown transform. The RESULT
-//           is a string leaf of the structured value, so the CUE encoder owns the
-//           YAML quoting/block-scalar — which is what lets a prose field (the
-//           user-voice report) be composed WITHOUT a hand-written YAML template.
-#EmitStage: { kind: "emit", id: string, schema: string, value: {[string]: _}, vars?: {[string]: _}, out: string, format?: "yaml" | "json", validate?: string, skip_when?: string }
-#MediaStage:   { kind: "media",    id: string, assemble: bool, transcode?: string, skip_when?: string }
-#GateStage:    { kind: "gate",     id: string, condition: string, skip_when?: string }
-#CommandStage: { kind: "command",  id: string, command: string, expect_exit?: int }   // EXTERNAL processes ONLY
-#RedoSpec: { on_fail?: [...string] | string, triggers?: {[string]: string}, max?: int & >0, escalate_after?: int & >0 }
 
+// #MediaSpec: the pipeline-level media gate config.
 #MediaSpec: { files: [string, ...string], min: {[string]: int}, dir: string }
-#ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string, control_bed_template?: string }
 
-// #StageFinding — one row of the per-run ledger dump (stage-findings.yml). The
-// dump is emitted schema-first (marshalled + validated), so it is always valid
-// YAML — a debug artifact no reader can parse is worthless.
-#StageFinding: close({
-	stage!:   string
-	kind!:    string
-	status!:  string
-	trigger?: string
-	message?: string
-	// duration_seconds: the stage's wall-clock time. The runner has ALWAYS
-	// measured this (StageResult.Duration) but the dump DROPPED it, so the one
-	// artifact that could answer "where did the lane's 13 minutes go?" carried
-	// no timing at all. It is authored here so the dump is the timing record.
-	duration_seconds?: int & >=0
-	outputs?: {...}
-})
-#StageFindings: [...#StageFinding]
+// #ReportSpec: the report-rendering config a generate/emit stage carries.
+#ReportSpec: { template: string, frontmatter_schema?: string, bed_template?: string, control_bed_template?: string }
 
 // Probe verb inputs (deterministic, engine-native).
 #MediaGateInput:      { dir: string, files: [string], min: {[string]: int} }
@@ -288,3 +173,89 @@
 #LLMNamedToolChoice: close({
 	function: close({name: string})
 })
+
+// ── Per-verb input shapes (the lifted-verb provider contract) ───────────────
+//
+// These are the per-verb input shapes for the six stage verbs (agent, probe,
+// ade, generate, emit, media) plus the deterministic gate. They are the input
+// contract of the ordinary `verb:` providers the stage bodies were lifted into,
+// and the migrator's frozen key spellings have a SINGLE source to agree on here.
+// #PipelineMediaInput.assemble is retained as a REQUIRED field even though no Go
+// reader consults it: the retired grammar declared it, and a field the old
+// grammar accepted is never silently dropped.
+//
+// WHY EVERY DEF HERE CARRIES THE `#Pipeline` PREFIX. The host splices EVERY
+// loaded plugin's served schema into ONE CUE instance (the loader appends each
+// served schema to the same value), and CUE UNIFIES two same-named defs instead
+// of erroring — so a plugin's def names share ONE GLOBAL namespace with every
+// OTHER plugin's. The load gate's splice detects a collision with the BASE only;
+// it does NOT detect plugin-vs-plugin. An un-prefixed `#AgentInput` here was
+// exactly that collision, and a silent one: plugin-agent is a RELEASED plugin
+// declaring `{Class: "kind", Word: "agent", InputDef: "#AgentInput"}` with an
+// incompatible shape (`command: [string, ...string]` + `prompt_via`), so the two
+// would have unified and rejected EVERY `agent: {prompt: …}` step with no error
+// at this seam. The prefix makes this plugin's seven defs collision-free by
+// construction. The loader-side class fix (namespace, or reject a plugin-vs-plugin
+// collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
+// added here takes the same prefix.
+//
+// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
+// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+#PipelineAgentInput: {
+	prompt:     string                  @go(Prompt)
+	skill?:     [...string]             @go(Skill)
+	tools?:     [...string]             @go(Tools)
+	outputs?:   {[string]: #OutputType} @go(Outputs)
+	max_turns?: int & >0                @go(Max_turns)
+	llm?:       #LLMSpec                @go(Llm)
+	redo?:      #RedoSpec               @go(Redo)
+	cache?:     #CacheSpec              @go(Cache)
+	repo?:      string                  @go(Repo)
+	skills?:    {corpus: string}        @go(Skills)
+}
+
+#PipelineProbeInput: {
+	verbs:    [string, ...string] @go(Verbs)
+	input?:   {[string]: _}       @go(Input)
+	outputs?: [...string]         @go(Outputs)
+	redo?:    #RedoSpec           @go(Redo)
+	media?:   #MediaSpec          @go(Media)
+}
+
+#PipelineAdeInput: {
+	bed:      string      @go(Bed)
+	fail_on?: [...string] @go(Fail_on)
+	redo?:    #RedoSpec   @go(Redo)
+}
+
+#PipelineGenerateInput: {
+	template:      string       @go(Template)
+	vars?:         {[string]: _} @go(Vars)
+	out:           string       @go(Out)
+	validate?:     string       @go(Validate)
+	negate_checks?: bool        @go(Negate_checks)
+	report?:       #ReportSpec  @go(Report)
+}
+
+#PipelineEmitInput: {
+	schema:   string           @go(Schema)
+	value:    {[string]: _}    @go(Value)
+	vars?:    {[string]: _}    @go(Vars)
+	out:      string           @go(Out)
+	format?:  "yaml" | "json"  @go(Format)
+	validate?: string          @go(Validate)
+	report?:  #ReportSpec      @go(Report)
+}
+
+// #PipelineMediaInput — dir/files are declared here because the Go reader consults them although the retired media stage did not declare them.
+#PipelineMediaInput: {
+	assemble:   bool        @go(Assemble)
+	transcode?: string      @go(Transcode)
+	dir?:       string      @go(Dir)
+	files?:     [...string] @go(Files)
+	media?:     #MediaSpec  @go(Media)
+}
+
+#PipelineGateInput: {
+	condition: string @go(Condition)
+}

@@ -11,7 +11,7 @@ import (
 // the validate field entirely).
 func TestGenerateValidateContract(t *testing.T) {
 	workdir := t.TempDir()
-	rc := &runCtx{workdir: workdir, env: map[string]string{}}
+	rc := &verbEnv{workdir: workdir, env: map[string]string{}}
 	raw := map[string]any{
 		"template": "artifact: rendered",
 		"out":      "out/artifact.txt",

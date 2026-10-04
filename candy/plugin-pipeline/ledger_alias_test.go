@@ -30,7 +30,7 @@ func TestProbeLedgerGate_Aliases(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cbase, "summary.yml"), []byte("steps:\n  - ok: true\n  - ok: true\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	rc := &runCtx{workdir: dir}
+	rc := &verbEnv{workdir: dir}
 	// the ENTITY-NAME spelling (the charly.yml's actual keys) — rooted at the workdir
 	ok, msg, val := probeLedgerGate(map[string]any{
 		"bed_name":         "check-omarchy-pr-42-vm",
