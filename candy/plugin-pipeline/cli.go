@@ -17,6 +17,7 @@ import (
 // runCLI: the command:pipeline surface (OpRun args).
 //
 //	pipeline run <entity> [--dry-run] [--args-json <json-object>] [--mode human|tool]
+//	pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]
 //	pipeline validate <entity>
 //	pipeline agent [--system-prompt <text>] [--prompt <text|->] [--tools a,b] [--out P]
 //	pipeline probe <verb> --self-test
@@ -28,6 +29,16 @@ import (
 // engine (plugin-lobster today) owns execution; this command never runs a step
 // itself. `--dry-run` stops after the lowering (validate + lower, no dispatch).
 //
+// `resume` is the FRONT-END leg of answering a gate the engine paused on, and it
+// dispatches OpWorkflowResume with the SAME envelope shape `run` documents: the
+// approval decision is TRI-STATE on the wire (`approve` absent | false | true), so
+// `--approve no` sends `"approve": false` — a REJECTION — while passing no approval
+// flag at all sends no decision, which the engine refuses BY NAME rather than reading
+// as a rejection. `--cancel` is an ABORT and is deliberately a different arm from
+// either. When neither `--token` nor `--id` is given, the handle the interrupted `run`
+// recorded in the run's gen dir is used, so `resume <name> --approve yes` works without
+// the caller copying a token out of the run output.
+//
 // The run leg's dispatch inputs — `--args-json` (the pipeline's declared args) and
 // `--mode human|tool` — are parsed and validated up front, so a malformed flag is a
 // named error in EVERY mode instead of being silently accepted by the path that does
@@ -37,7 +48,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 	var rest []string
 	for _, a := range args {
 		switch a {
-		case "run", "validate", "agent", "probe":
+		case "run", "validate", "agent", "probe", "resume":
 			mode = a
 		default:
 			rest = append(rest, a)
@@ -49,7 +60,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			fmt.Println("pipeline self-test: ok (workflow front-end + agent runtime present)")
 			return 0, nil
 		}
-		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe")
+		return 2, fmt.Errorf("pipeline: need run|validate|agent|probe|resume")
 	case "validate":
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline validate <entity>")
@@ -69,7 +80,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			return 1, err
 		}
 		name := rest[0]
-		genDir := filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+		genDir := genDirOf(name)
 		params, perr := workflowRunParams(name, genDir, rest)
 		if perr != nil {
 			return 1, perr
@@ -99,10 +110,67 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		if ex == nil {
 			return 1, fmt.Errorf("pipeline run %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowRun)
 		}
-		if _, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, params, nil, ops.InvokeProviderOpts{}); ierr != nil {
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowRun, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
 			return 1, fmt.Errorf("pipeline run %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowRun, ierr)
 		}
-		fmt.Printf("pipeline %s: ran via workflow:%s\n", name, engine)
+		var reply spec.WorkflowRunReply
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &reply)
+		}
+		if rerr := recordPending(genDir, &reply); rerr != nil {
+			return 1, rerr
+		}
+		if reply.Status != "" {
+			fmt.Printf("pipeline %s: ran via workflow:%s — status=%s\n", name, engine, reply.Status)
+		} else {
+			fmt.Printf("pipeline %s: ran via workflow:%s\n", name, engine)
+		}
+		// `resume_token` is present exactly when status is needs_approval / needs_input
+		// (spec's own words on the envelope), so the status is what names the next move.
+		switch reply.Status {
+		case "needs_approval":
+			fmt.Printf("pipeline %s: an approval is pending — answer it with `charly pipeline resume %s --approve yes|no`\n", name, name)
+		case "needs_input":
+			fmt.Printf("pipeline %s: input is pending — answer it with `charly pipeline resume %s --response-json '{...}'`\n", name, name)
+		}
+		return 0, nil
+	case "resume":
+		if len(rest) == 0 {
+			return 2, fmt.Errorf("pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]")
+		}
+		name := rest[0]
+		p, err := loadEntity(name)
+		if err != nil {
+			return 1, err
+		}
+		params, perr := workflowResumeParams(name, rest)
+		if perr != nil {
+			return 1, perr
+		}
+		engine := p.Engine
+		if engine == "" {
+			engine = "lobster"
+		}
+		if ex == nil {
+			return 1, fmt.Errorf("pipeline resume %s: no host executor — the workflow engine is reached host-side via InvokeProvider(\"workflow\", %q, %q); run this through charly, not the plugin CLI directly", name, engine, ops.OpWorkflowResume)
+		}
+		raw, ierr := ex.InvokeProvider(context.Background(), "workflow", engine, ops.OpWorkflowResume, params, nil, ops.InvokeProviderOpts{})
+		if ierr != nil {
+			return 1, fmt.Errorf("pipeline resume %s: workflow:%s %s: %w", name, engine, ops.OpWorkflowResume, ierr)
+		}
+		var reply spec.WorkflowRunReply
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &reply)
+		}
+		if rerr := recordPending(genDirOf(name), &reply); rerr != nil {
+			return 1, rerr
+		}
+		if reply.Status != "" {
+			fmt.Printf("pipeline %s: resumed via workflow:%s — status=%s\n", name, engine, reply.Status)
+		} else {
+			fmt.Printf("pipeline %s: resumed via workflow:%s\n", name, engine)
+		}
 		return 0, nil
 	case "agent":
 		sys := flagAfter(rest, "--system-prompt")
@@ -223,4 +291,113 @@ func runDispatchFlags(name string, rest []string) (map[string]string, string, er
 		}
 	}
 	return args, mode, nil
+}
+
+// genDirOf is the ONE definition of a pipeline's generated-state directory — the
+// lowering target `run` writes (workflow.lobster + charly.yml) and the place `resume`
+// looks for the gate handle. Two spellings of this path would let a resume read a
+// directory the run never wrote.
+func genDirOf(name string) string {
+	return filepath.Join(projectDir(), ".opencharly", "pipelines", name)
+}
+
+// pendingGate is the handle a paused run leaves behind so that a LATER, SEPARATE process
+// can answer its gate: `charly pipeline resume <name> …` is ordinarily run after the
+// `charly pipeline run <name>` that paused has already exited, so the token cannot be
+// carried in memory and has to be recorded on disk.
+type pendingGate struct {
+	ResumeToken string `json:"resumeToken"`
+	Status      string `json:"status"`
+}
+
+func pendingPath(genDir string) string { return filepath.Join(genDir, "pending.json") }
+
+// recordPending writes the paused gate's token into the run's gen dir, or CLEARS a stale
+// one when the reply carries no gate. Clearing matters: a token left from an earlier
+// paused run would otherwise be picked up by a later `resume <name>` and answer a gate
+// that no longer exists.
+func recordPending(genDir string, reply *spec.WorkflowRunReply) error {
+	if reply.ResumeToken == "" {
+		if err := os.Remove(pendingPath(genDir)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("pipeline: clear pending gate in %s: %w", genDir, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(genDir, 0o755); err != nil {
+		return err
+	}
+	b, merr := json.Marshal(pendingGate{ResumeToken: reply.ResumeToken, Status: reply.Status})
+	if merr != nil {
+		return merr
+	}
+	// 0o600: the token is a capability — it answers the gate it names.
+	return os.WriteFile(pendingPath(genDir), b, 0o600)
+}
+
+// readPendingToken resolves a pipeline NAME to the gate handle its last run recorded.
+// A missing handle is a NAMED error, never an empty token: an empty token would reach
+// the engine as "no handle" and be refused there with a message about tokens rather than
+// about the pipeline the caller actually named.
+func readPendingToken(genDir string) (string, error) {
+	b, err := os.ReadFile(pendingPath(genDir))
+	if err != nil {
+		return "", fmt.Errorf("no pending gate recorded in %s (run the pipeline first, or pass --token/--id): %w", genDir, err)
+	}
+	var g pendingGate
+	if uerr := json.Unmarshal(b, &g); uerr != nil {
+		return "", fmt.Errorf("pending gate in %s: %w", genDir, uerr)
+	}
+	if g.ResumeToken == "" {
+		return "", fmt.Errorf("no pending gate recorded in %s", genDir)
+	}
+	return g.ResumeToken, nil
+}
+
+// workflowResumeParams builds the OpWorkflowResume envelope — the mirror of
+// workflowRunParams, and the reason the CLI cannot drift from the envelope it documents.
+//
+// `--approve` is parsed into the TRI-STATE pointer, not a bool: `yes` → &true, `no` →
+// &false, and ABSENT → nil. That last case is the whole point of the wire change — a
+// caller that supplies no decision must be distinguishable from one that rejected, and
+// the engine refuses the former by name.
+func workflowResumeParams(name string, rest []string) ([]byte, error) {
+	req := spec.WorkflowResumeRequest{Pipeline: name, Token: flagAfter(rest, "--token"), Id: flagAfter(rest, "--id")}
+	if req.Token == "" && req.Id == "" {
+		tok, err := readPendingToken(genDirOf(name))
+		if err != nil {
+			return nil, err
+		}
+		req.Token = tok
+	}
+	if has(rest, "--approve") {
+		switch flagAfter(rest, "--approve") {
+		case "yes":
+			t := true
+			req.Approve = &t
+		case "no":
+			f := false
+			req.Approve = &f
+		default:
+			return nil, fmt.Errorf("pipeline resume %s: --approve %q: accepted values are yes, no", name, flagAfter(rest, "--approve"))
+		}
+	}
+	if has(rest, "--cancel") {
+		req.Cancel = true
+	}
+	if has(rest, "--response-json") {
+		raw := flagAfter(rest, "--response-json")
+		var resp map[string]any
+		if uerr := json.Unmarshal([]byte(raw), &resp); uerr != nil {
+			return nil, fmt.Errorf("pipeline resume %s: --response-json: %v (want a JSON object)", name, uerr)
+		}
+		if resp == nil {
+			return nil, fmt.Errorf("pipeline resume %s: --response-json: want a JSON object, got %q", name, raw)
+		}
+		req.Response = resp
+	}
+	params, merr := json.Marshal(req)
+	if merr != nil {
+		return nil, fmt.Errorf("pipeline resume %s: encode request: %w", name, merr)
+	}
+	return params, nil
 }
