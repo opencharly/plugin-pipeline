@@ -20,6 +20,34 @@ func runVerbAde(in params.PipelineAdeInput, e *verbEnv) (map[string]any, error) 
 	return runAdeStage(e.ctxOf(), e, e.stageRaw(in))
 }
 
+// adeLaneHead: the lane's head sha for the external check-run fallback.
+//
+// It is a MAP READ of the run context (`rc.env["PR_HEAD_SHA"]`), never
+// `resolveRefs("$env.PR_HEAD_SHA")`. refs.go does carry the `$env.X` grammar that
+// reads this key, but that grammar is DEAD on this path: a verb reached standalone
+// is wired to the IDENTITY resolver (verb_env.go:standaloneVerbEnv — the caller's
+// plan already owns ref resolution), and that is the only production `verbEnv`
+// constructor in the package. So `resolveRefs` hands back the LITERAL
+// `$env.PR_HEAD_SHA`, and the fallback would render
+// `--var PR_HEAD_SHA=$env.PR_HEAD_SHA` — a string that LOOKS like a head and is
+// therefore carried into the bed's evidence as one.
+//
+// The predecessor read os.Getenv("PR_HEAD_SHA"), the process-global the concurrent
+// lanes share, and the live lane logged `--var PR_HEAD_SHA=` while its run context
+// carried a real sha (RCA 2026.252.2210). The retired in-process executor instead
+// BOUND this key per run (headSHA(pr, repo), an operator pin winning); this method
+// is that same lookup, restored.
+//
+// A standalone dispatch carries no per-run map, so the read yields "": the honest
+// signal that no lane head reached the fallback. A missing run context is honest;
+// a literal ref is a wrong answer that looks like a real one.
+func (e *verbEnv) adeLaneHead() string {
+	if e == nil {
+		return ""
+	}
+	return e.env["PR_HEAD_SHA"]
+}
+
 // runAdeStage runs the rendered ORACLE bed through the host's compiled-in
 // check-run ONCE (the org R10 machinery + its ADE agent-check grading + the
 // --var per-PR passthrough). The deterministic exit contract maps to the report
@@ -39,9 +67,8 @@ func runAdeStage(ctx context.Context, rc *verbEnv, raw map[string]any) (map[stri
 		// The lane's head comes from the run context, NEVER the process env —
 		// the batch lanes are concurrent and the process env carries the
 		// operator's value or nothing (RCA: the live lane logged
-		// `--var PR_HEAD_SHA=`). $env.PR_HEAD_SHA resolves through the run
-		// context's own env map (verb_env.go wires the resolver back to it).
-		verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.resolveRefs("$env.PR_HEAD_SHA"), bed, rc.workdir)
+		// `--var PR_HEAD_SHA=`).
+		verdict, summary, aerr = adeVerdict(ctx, rc.pr, rc.adeLaneHead(), bed, rc.workdir)
 	}
 	if aerr != nil {
 		return nil, aerr
