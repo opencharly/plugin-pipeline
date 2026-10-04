@@ -280,6 +280,62 @@ check-pipeline-local:
                   CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan
                   rc=$?; rm -rf "$d"; exit $rc
                 in_container: false
+            - check: the two lifted FILE-WRITING verbs run through the engine — `generate` renders its template with a typed var into `out`, and `emit` validates its value against a literal CUE def and serializes it
+              id: pipeline-runs-lifted-file-verbs
+              context:
+                - runtime
+              exit_status: 0
+              stdout:
+                - contains: 'lifted-file-verbs OK'
+              command:
+                command: |-
+                  d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
+                  printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
+                  cat > "$d/candy/x/charly.yml" <<'YAML'
+                  lifted-verbs-plan:
+                    pipeline:
+                      description: two lifted verb bodies with deterministic file artifacts
+                      # A lifted verb needs BOTH load gates satisfied, and each is its own
+                      # error: a verb KEY is not itself an execution arm ("no execution arm
+                      # — set exactly one of run/pipeline/.../plan/..."), and inside `plan:`
+                      # the step still needs an INTENT keyword ("plan[0] has no intent
+                      # keyword (run/check/agent-run/agent-check/include)"). So a lifted verb
+                      # is spelled as a plan step carrying an intent label AND the verb key,
+                      # exactly like the `gate:` step above — never as bare step-level sugar.
+                      steps:
+                        - id: render
+                          plan:
+                            - run: render the greeting
+                              generate:
+                                template: "hello ${who}"
+                                vars:
+                                  who: world
+                                out: "@OUTDIR@/rendered.txt"
+                        - id: emit
+                          plan:
+                            - run: emit the record
+                              emit:
+                                schema: '#Record: {name: string}'
+                                value:
+                                  name: rendered
+                                out: "@OUTDIR@/emitted.yml"
+                  YAML
+                  sed -i "s|@OUTDIR@|$d|g" "$d/candy/x/charly.yml"
+                  rc=0
+                  # The routing lock in verb_reach_test.go pins ROUTING for these two verbs
+                  # only (their bodies write files, so a unit test would need a workdir) —
+                  # this step is the live witness that the bodies themselves still WRITE,
+                  # through a real `charly task` dispatch of the lowered pair.
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run lifted-verbs-plan > "$d/run.out" 2>&1 || rc=1
+                  grep -q 'ran via workflow:lobster — status=ok' "$d/run.out" || rc=1
+                  # generate: the INLINE template rendered the typed var, into the absolute out
+                  grep -q 'hello world' "$d/rendered.txt" || rc=1
+                  # emit: the value validated against the literal CUE source and serialized (yaml default)
+                  grep -q 'name: rendered' "$d/emitted.yml" || rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" >&2; fi
+                  [ "$rc" -eq 0 ] && echo 'lifted-file-verbs OK'
+                  exit $rc
+                in_container: false
             - check: the resume leg answers a paused APPROVAL — `pipeline run` reports needs_approval and leaves the gate handle, and `pipeline resume --approve yes` carries the SAME run to ok
               id: pipeline-resume-approval-yes
               context:
