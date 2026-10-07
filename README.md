@@ -42,7 +42,8 @@ lifted stage verbs.
   `verb:media` / `verb:gate`** — the seven stage bodies as ordinary verbs, each
   reachable as a `<word>: <input>` step from any plan.
 - **SDD** — `schema/pipeline.cue` is the single source for the per-verb input
-  shapes; `task cue:gen` emits
+  shapes; splice a `package params` clause onto it and run `cue exp gengotypes .`,
+  the recipe this repo's own `ci.yml` reproduces, which emits
   `params/cue_types_gen.go` (committed, CI-reproducible); every authored input is
   validated at load.
 
