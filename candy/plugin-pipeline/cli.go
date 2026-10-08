@@ -370,8 +370,9 @@ func genDirOf(name string) string {
 	return filepath.Join(projectDir(), ".opencharly", "pipelines", name)
 }
 
-// scheduleDescriptor is the front-end's half of the scheduler contract: the IR's own
-// trigger list, wrapped with the pipeline name so the file describes itself. The engine's
+// scheduleDescriptor is the front-end's half of the scheduler contract: the contract's own
+// `spec.WorkflowTrigger` list (spec/schema/workflow.cue — the engine wire), wrapped with the
+// pipeline name so the file describes itself. The engine's
 // `workflow-schedule apply` reads exactly this shape out of the run's gen dir
 // (plugin-lobster, schedule.go), so the writer here and the reader there are ONE
 // contract — the front-end never makes the engine re-derive an authored trigger from the
