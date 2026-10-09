@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 )
@@ -56,12 +57,11 @@ func runAgentStage(ctx context.Context, rc *verbEnv, raw map[string]any) (map[st
 	if rc != nil {
 		corpus := skillCorpus(rc)
 		for _, name := range strList(raw["skill"]) {
-			p := filepath.Join(corpus, name, "SKILL.md")
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return map[string]any{}, fmt.Errorf("agent stage %s: skill %q not found in the corpus at %s (declared skill: refs must resolve — the decorative-ref era is gone)", id, name, corpus)
+			bundle, berr := skillBundle(corpus, name)
+			if berr != nil {
+				return map[string]any{}, fmt.Errorf("agent stage %s: %w", id, berr)
 			}
-			sys += "\n\n--- " + name + " ---\n" + string(b)
+			sys += bundle
 		}
 	}
 	// stage-level turn cap (raw max_turns) overrides the env default; the
@@ -93,6 +93,36 @@ func runAgentStage(ctx context.Context, rc *verbEnv, raw map[string]any) (map[st
 			return map[string]any{}, &redoError{trigger: "redo-plan", msg: fmt.Sprintf("output %q: %v", name, err)}
 		}
 		out[name] = val
+	}
+	return out, nil
+}
+
+// skillBundle returns the system-prompt body for ONE declared skill: its SKILL.md and every
+// references/*.md beside it, in sorted order.
+//
+// The references split is PART OF THE SKILL, not an optional extra. The contract is "an entry SKILL.md
+// plus sibling references/*.md files in the same skill directory, loaded on demand by path" — and a
+// PIPELINE STAGE has no harness to load them on demand, so the path never arrives and progressive
+// disclosure silently becomes no disclosure at all. Sorted so one skill yields one system prompt, run
+// after run (opencharly/plugin-pipeline#36).
+func skillBundle(corpus, name string) (string, error) {
+	dir := filepath.Join(corpus, name)
+	b, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
+	if err != nil {
+		return "", fmt.Errorf("skill %q not found in the corpus at %s (declared skill: refs must resolve — the decorative-ref era is gone)", name, corpus)
+	}
+	out := "\n\n--- " + name + " ---\n" + string(b)
+	refs, gerr := filepath.Glob(filepath.Join(dir, "references", "*.md"))
+	if gerr != nil {
+		return "", fmt.Errorf("skill %q: references glob: %w", name, gerr)
+	}
+	sort.Strings(refs)
+	for _, r := range refs {
+		rb, rerr := os.ReadFile(r)
+		if rerr != nil {
+			return "", fmt.Errorf("skill %q: reference %s: %w", name, filepath.Base(r), rerr)
+		}
+		out += "\n\n--- " + name + "/references/" + filepath.Base(r) + " ---\n" + string(rb)
 	}
 	return out, nil
 }
