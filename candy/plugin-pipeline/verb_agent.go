@@ -57,31 +57,11 @@ func runAgentStage(ctx context.Context, rc *verbEnv, raw map[string]any) (map[st
 	if rc != nil {
 		corpus := skillCorpus(rc)
 		for _, name := range strList(raw["skill"]) {
-			dir := filepath.Join(corpus, name)
-			p := filepath.Join(dir, "SKILL.md")
-			b, err := os.ReadFile(p)
-			if err != nil {
-				return map[string]any{}, fmt.Errorf("agent stage %s: skill %q not found in the corpus at %s (declared skill: refs must resolve — the decorative-ref era is gone)", id, name, corpus)
+			bundle, berr := skillBundle(corpus, name)
+			if berr != nil {
+				return map[string]any{}, fmt.Errorf("agent stage %s: %w", id, berr)
 			}
-			sys += "\n\n--- " + name + " ---\n" + string(b)
-			// The references/ split is PART OF THE SKILL, not an optional extra. The contract is "an
-			// entry SKILL.md plus sibling references/*.md files in the same skill directory, loaded on
-			// demand by path" — and a PIPELINE STAGE has no harness to load them on demand, so the path
-			// never arrives and the progressive disclosure silently becomes no disclosure at all.
-			// Appended in sorted order so one skill yields one system prompt, run after run
-			// (opencharly/plugin-pipeline#36).
-			refs, gerr := filepath.Glob(filepath.Join(dir, "references", "*.md"))
-			if gerr != nil {
-				return map[string]any{}, fmt.Errorf("agent stage %s: skill %q: references glob: %w", id, name, gerr)
-			}
-			sort.Strings(refs)
-			for _, r := range refs {
-				rb, rerr := os.ReadFile(r)
-				if rerr != nil {
-					return map[string]any{}, fmt.Errorf("agent stage %s: skill %q: reference %s: %w", id, name, filepath.Base(r), rerr)
-				}
-				sys += "\n\n--- " + name + "/references/" + filepath.Base(r) + " ---\n" + string(rb)
-			}
+			sys += bundle
 		}
 	}
 	// stage-level turn cap (raw max_turns) overrides the env default; the
