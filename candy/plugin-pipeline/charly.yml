@@ -34,6 +34,10 @@ plugin-pipeline:
               id: plugin-pipeline-module-present
               context: [build]
               command: "test -f go.mod && test -f cli.go && test -f refs.go && test -f params/cue_types_gen.go"
+            - check: the committed params projection matches this candy's schema (fails if the projection drifts from its source)
+              id: params-projection-current
+              context: [build]
+              command: "${CHARLY_BIN} candy params plugin-pipeline --check"
 
 pipeline-skill:
     skill:
