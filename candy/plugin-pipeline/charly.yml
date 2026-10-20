@@ -40,9 +40,5 @@ pipeline-skill:
         name: pipeline
         family: pipeline
         owner: plugin-pipeline
-        description: |-
-            The `charly pipeline` workflow front-end — resolve/validate/lower a declared
-            kind:pipeline entity and dispatch it to the workflow engine, the bare agent
-            runtime, deterministic probe verbs, template rendering.
         triggers:
             - "`charly pipeline` / agent workflow engine / kind:pipeline / pipeline run"
