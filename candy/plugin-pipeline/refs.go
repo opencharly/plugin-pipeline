@@ -20,30 +20,78 @@ import (
 // schema-first writer, and the tiny accessors are still the ONE implementation
 // every verb body uses (R3).
 
-// refRe matches the built-in refs: $pr/$calver/$workdir and $env.NAME. The
-// @stage.output arm is retained in the pattern only so an authored @-ref is
-// matched (and left for the resolver to decide) rather than silently passed
-// through as literal text.
-var refRe = regexp.MustCompile(`\$(pr|calver|workdir)|\$env\.([A-Z0-9_]+)|@([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)(\.([A-Za-z0-9_-]+))?`)
+// envRefRe matches the ENVIRONMENT reference in BOTH spellings it is authored in:
+// the retired `$env.NAME` (what a pre-cutover document says) and `${env.NAME}`
+// (what plugin-migrate's reshape emits, and the brace form every other ref uses,
+// so an author writes it by analogy). NAME is the POSIX environment charset the
+// bare form always used — `env.` names the NAMESPACE, so the dot is never part of
+// the name.
+var envRefRe = regexp.MustCompile(`\$env\.([A-Z0-9_]+)|\$\{env\.([A-Z0-9_]+)\}`)
 
-// resolveRefs replaces $pr/$calver/$workdir/$env.NAME in a string. When a
-// resolver override is set (a standalone verb dispatch), it IS the resolver and
-// the text is returned verbatim by it. `@github…` refs are CANDY references,
-// never refs to substitute.
+// runRefRe matches the RUN-CONTEXT refs: $pr/$calver/$workdir and the retained
+// @stage.output form (matched so an authored @-ref is resolved or declined by a
+// resolver rather than silently passed through as literal text).
+var runRefRe = regexp.MustCompile(`\$(pr|calver|workdir)|@([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)(\.([A-Za-z0-9_-]+))?`)
+
+// resolveRefs substitutes the ENVIRONMENT namespace, then the run-context refs.
+//
+// The two namespaces have DIFFERENT owners, and that is why they are two passes:
+//
+//   - `env.` is this verb's OWN. No other layer in the chain resolves it: the
+//     plan's `${VAR}` expander (kit.ExpandOpVars / kit.TestVarRefPattern) accepts
+//     uppercase names only and never matches the `env.` prefix, and the engine's
+//     `${arg}` template reads the run's ARGS, not the environment. So the
+//     substitution is UNCONDITIONAL — it runs even under a resolver override,
+//     because gating it there is exactly how a data leaf used to reach a body as
+//     the literal text `${env.NAME}`.
+//   - `$pr`/`$calver`/`$workdir`/`@stage.output` belong to the RUN CONTEXT. A verb
+//     reached standalone is wired to the IDENTITY resolver (the caller's plan owns
+//     those), and any other construction leaves `resolve` nil so this grammar
+//     applies.
 func (rc *verbEnv) resolveRefs(s string) string {
 	if rc == nil {
 		return s
 	}
+	s = rc.substituteEnvRefs(s)
 	if rc.resolve != nil {
 		return rc.resolve(s)
 	}
-	return refRe.ReplaceAllStringFunc(s, func(m string) string {
+	return rc.substituteRunRefs(s)
+}
+
+// substituteEnvRefs reads the PROCESS environment (rc.procEnv) — the source the
+// retired `$env.NAME` read. A name the process does not carry renders EMPTY and is
+// RECORDED in rc.missingEnv; the dispatch boundary (verb_env.go:invokeLiftedVerb)
+// turns that record into one named failure. Empty on its own is never the answer:
+// it is a run-time emptiness in place of a load error.
+func (rc *verbEnv) substituteEnvRefs(s string) string {
+	if !strings.Contains(s, "env.") {
+		return s
+	}
+	return envRefRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := envRefRe.FindStringSubmatch(m)
+		name := g[1]
+		if name == "" {
+			name = g[2]
+		}
+		if v, ok := rc.procEnv[name]; ok {
+			return v
+		}
+		rc.missingEnv = append(rc.missingEnv, name)
+		return ""
+	})
+}
+
+// substituteRunRefs is the run-context grammar: $pr / $calver / $workdir, and the
+// @stage.output form. `@github…` refs are CANDY references, never refs to
+// substitute.
+func (rc *verbEnv) substituteRunRefs(s string) string {
+	return runRefRe.ReplaceAllStringFunc(s, func(m string) string {
 		if strings.HasPrefix(m, "@github") {
 			return m
 		}
-		g := refRe.FindStringSubmatch(m)
-		switch {
-		case g[1] != "":
+		g := runRefRe.FindStringSubmatch(m)
+		if g[1] != "" {
 			switch g[1] {
 			case "pr":
 				return rc.pr
@@ -52,14 +100,23 @@ func (rc *verbEnv) resolveRefs(s string) string {
 			case "workdir":
 				return rc.workdir
 			}
-		case g[2] != "":
-			if v, ok := rc.env[g[2]]; ok {
-				return v
-			}
-			return ""
 		}
 		return ""
 	})
+}
+
+// envRefName returns the environment NAME of the first `$env.NAME` /
+// `${env.NAME}` reference in s. It is the read-only companion of the grammar, used
+// where a value must NOT be spliced into the text it is resolved in.
+func envRefName(s string) (string, bool) {
+	g := envRefRe.FindStringSubmatch(s)
+	if g == nil {
+		return "", false
+	}
+	if g[1] != "" {
+		return g[1], true
+	}
+	return g[2], true
 }
 
 // resolveValue returns a typed value for YAML inputs (strings are ref-resolved;

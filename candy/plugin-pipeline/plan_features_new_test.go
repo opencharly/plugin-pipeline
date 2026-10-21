@@ -235,7 +235,7 @@ func TestAgentCacheHitSkipsAgent(t *testing.T) {
 	}
 	t.Setenv("EVAL_LLM_BASE_URL", "http://127.0.0.1:1") // a hit must never dial
 	t.Setenv("PR_HEAD_SHA", "abc123")
-	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	rc := &verbEnv{pr: "7", calver: "c", workdir: wd, procEnv: map[string]string{"PR_HEAD_SHA": "abc123"}}
 	res, err := runAgentStage(rc.ctxOf(), rc, stage)
 	if err != nil {
 		t.Fatalf("agent cache hit: %v", err)
@@ -259,14 +259,14 @@ func TestAgentCacheMissOnNewHead(t *testing.T) {
 	}
 	// a miss: readAgentCache must report hit=false (the agent then runs, which
 	// this test does not exercise — it asserts the cache decision alone).
-	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "new111"}}
+	rc := &verbEnv{pr: "7", workdir: wd, procEnv: map[string]string{"PR_HEAD_SHA": "new111"}}
 	stage := map[string]any{"cache": map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"}}
 	_, hit, err := readAgentCache(rc, stage)
 	if err != nil || hit {
 		t.Fatalf("stale head must MISS: hit=%v err=%v", hit, err)
 	}
 	// and a missing file is a miss, not an error.
-	rc2 := &verbEnv{pr: "8", workdir: t.TempDir(), env: map[string]string{"PR_HEAD_SHA": "x"}}
+	rc2 := &verbEnv{pr: "8", workdir: t.TempDir(), procEnv: map[string]string{"PR_HEAD_SHA": "x"}}
 	_, hit2, err2 := readAgentCache(rc2, stage)
 	if err2 != nil || hit2 {
 		t.Fatalf("missing plan must MISS cleanly: hit=%v err=%v", hit2, err2)
@@ -288,7 +288,7 @@ func TestAgentCacheHitMissingOutputErrors(t *testing.T) {
 			"golden": map[string]any{"type": "string"},
 		},
 	}
-	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	rc := &verbEnv{pr: "7", workdir: wd, procEnv: map[string]string{"PR_HEAD_SHA": "abc123"}}
 	_, hit, err := readAgentCache(rc, stage)
 	if err == nil || hit {
 		t.Fatalf("a partial committed plan must error (hit=%v err=%v)", hit, err)
@@ -306,7 +306,7 @@ func TestAgentCacheHitBadTypeErrors(t *testing.T) {
 		"cache":   map[string]any{"path": "eval.yml", "key": "$env.PR_HEAD_SHA"},
 		"outputs": map[string]any{"tests": map[string]any{"type": "string_list"}},
 	}
-	rc := &verbEnv{pr: "7", workdir: wd, env: map[string]string{"PR_HEAD_SHA": "abc123"}}
+	rc := &verbEnv{pr: "7", workdir: wd, procEnv: map[string]string{"PR_HEAD_SHA": "abc123"}}
 	if _, hit, err := readAgentCache(rc, stage); err == nil || hit {
 		t.Fatalf("a bad-typed cached value must error (hit=%v err=%v)", hit, err)
 	}

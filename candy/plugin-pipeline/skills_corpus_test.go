@@ -13,7 +13,7 @@ func TestSkillCorpus_RefResolved(t *testing.T) {
 	wd := t.TempDir()
 	rc := &verbEnv{
 		workdir: wd,
-		env:     map[string]string{"EVAL_UMBRELLA": umbrella},
+		procEnv: map[string]string{"EVAL_UMBRELLA": umbrella},
 		skills:  map[string]any{"corpus": "$env.EVAL_UMBRELLA/marketplace/distros/skills"},
 	}
 	got := skillCorpus(rc)
@@ -27,7 +27,7 @@ func TestSkillCorpus_RelativeLiteralJoinsWorkdir(t *testing.T) {
 	wd := t.TempDir()
 	rc := &verbEnv{
 		workdir: wd,
-		env:     map[string]string{},
+		procEnv: map[string]string{},
 		skills:  map[string]any{"corpus": "candy/eval-lane/skills"},
 	}
 	got := skillCorpus(rc)
@@ -43,7 +43,7 @@ func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
 	wd := t.TempDir()
 	rc := &verbEnv{
 		workdir: wd,
-		env:     map[string]string{},
+		procEnv: map[string]string{},
 		skills:  map[string]any{"corpus": "$workdir/generated/skills"},
 	}
 	got := skillCorpus(rc)
@@ -55,7 +55,7 @@ func TestSkillCorpus_WorkdirRefResolved(t *testing.T) {
 
 func TestSkillCorpus_AbsoluteLiteralUnchanged(t *testing.T) {
 	abs := filepath.Join(t.TempDir(), "corpus")
-	rc := &verbEnv{workdir: t.TempDir(), env: map[string]string{}, skills: map[string]any{"corpus": abs}}
+	rc := &verbEnv{workdir: t.TempDir(), procEnv: map[string]string{}, skills: map[string]any{"corpus": abs}}
 	if got := skillCorpus(rc); got != abs {
 		t.Fatalf("skillCorpus = %q, want the absolute %q unchanged", got, abs)
 	}

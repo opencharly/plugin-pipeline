@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestAdeLaneHeadIsAMapReadNeverALiteralRef restores the lock the lifted cutover
+// TestAdeLaneHeadIsARunContextReadNeverTheProcessEnv restores the lock the lifted cutover
 // dropped (the former root_cause_fixes_test.go:TestAdeVerdictUsesTheLaneHeadNotTheProcessEnv).
 //
 // The ADE stage must hand its external check-run fallback the LANE's head sha. The
@@ -14,8 +14,10 @@ import (
 // this lane's — and the live run logged `--var PR_HEAD_SHA=` (RCA 2026.252.2210).
 //
 // The assertions below lock the ACCESSOR (the value source). The call site is locked
-// separately, structurally, at the end of this test.
-func TestAdeLaneHeadIsAMapReadNeverALiteralRef(t *testing.T) {
+// separately, structurally, at the end of this test. The reason the ref form is wrong
+// is no longer "the grammar is dead": the grammar is live and reads the PROCESS
+// environment, which is exactly the source a per-lane head may not come from.
+func TestAdeLaneHeadIsARunContextReadNeverTheProcessEnv(t *testing.T) {
 	// A run context that BOUND the lane head — the per-run contract the retired
 	// executor established (headSHA(pr, repo), an operator pin winning).
 	bound := &verbEnv{env: map[string]string{"PR_NUMBER": "1", "PR_HEAD_SHA": "aaaa"}}
@@ -24,24 +26,29 @@ func TestAdeLaneHeadIsAMapReadNeverALiteralRef(t *testing.T) {
 	}
 
 	// The standalone env — the ONLY production verbEnv — carries NO per-run map, so
-	// the head is EMPTY. A missing run context is honest; a literal ref is a wrong
-	// answer that looks like a real one.
+	// the head is EMPTY. A missing run context is honest; the process environment's
+	// value is a wrong answer that looks like a real one.
 	std := standaloneVerbEnv(nil, t.TempDir())
 	if got := std.adeLaneHead(); got != "" {
 		t.Fatalf("adeLaneHead() on the standalone env = %q, want \"\"", got)
 	}
 
-	// ...and it must NOT fall back to the process env, which the concurrent lanes raced.
+	// ...and it must NOT fall back to the process env, which the concurrent lanes share.
+	// `std` snapshots the environment at construction, so the variable is set first and
+	// a SECOND constructor is built with it present — the read must still be "".
 	t.Setenv("PR_HEAD_SHA", "from-the-process-env")
-	if got := std.adeLaneHead(); got != "" {
+	live := standaloneVerbEnv(nil, t.TempDir())
+	if got := live.adeLaneHead(); got != "" {
 		t.Fatalf("adeLaneHead() must never read the process env; got %q", got)
 	}
 
-	// WHY the map read is load-bearing: the standalone resolver is the IDENTITY, so
-	// resolveRefs returns the literal. If this ever stops holding, adeLaneHead's
-	// rationale must be revisited deliberately — never silently kept.
-	if got := std.resolveRefs("$env.PR_HEAD_SHA"); got != "$env.PR_HEAD_SHA" {
-		t.Fatalf("standalone resolveRefs(\"$env.PR_HEAD_SHA\") = %q, want the literal — the identity resolver is exactly why adeLaneHead is a map read", got)
+	// WHY the map read is load-bearing: the ref grammar is LIVE and reads the PROCESS
+	// environment, so resolveRefs would hand the fallback the operator's value — a
+	// string that looks like a head and is not this lane's. The identity resolver is
+	// gone; the process environment is what makes the ref the wrong source. If this
+	// ever stops holding, adeLaneHead's rationale must be revisited deliberately.
+	if got := live.resolveRefs("$env.PR_HEAD_SHA"); got != "from-the-process-env" {
+		t.Fatalf("standalone resolveRefs(\"$env.PR_HEAD_SHA\") = %q, want the PROCESS environment's %q — a live grammar over the shared process env is exactly why adeLaneHead is a run-context map read", got, "from-the-process-env")
 	}
 
 	// The CALL SITE. Driving it behaviourally would need a real `charly` on PATH
@@ -68,7 +75,7 @@ func TestAdeLaneHeadIsAMapReadNeverALiteralRef(t *testing.T) {
 		t.Error("runAdeStage must take the lane head from rc.adeLaneHead()")
 	}
 	if strings.Contains(src, `resolveRefs("$env.PR_HEAD_SHA")`) {
-		t.Error("runAdeStage must NOT pass resolveRefs(\"$env.PR_HEAD_SHA\") — the standalone resolver is the identity, so that is the literal")
+		t.Error("runAdeStage must NOT pass resolveRefs(\"$env.PR_HEAD_SHA\") — the grammar reads the shared PROCESS environment, so that is the operator's value, not this lane's head")
 	}
 	if strings.Contains(src, `os.Getenv("PR_HEAD_SHA")`) {
 		t.Error("runAdeStage must NOT read PR_HEAD_SHA from the process env — the concurrent lanes share it (RCA 2026.252.2210)")
