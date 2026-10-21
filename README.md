@@ -29,9 +29,11 @@ lifted stage verbs.
   `--args-json <json-object>` carries the pipeline's declared args as an object of
   string values (a malformed value is a named error, never a silently-empty arg),
   and `--mode human|tool` selects the engine's envelope (absent leaves the engine's
-  own default in place). The reference grammar (`$pr` / `$calver` /
-  `$workdir` / `$env.NAME`) is resolved by the engine and by each verb body's
-  template.
+  own default in place). The RUN-CONTEXT grammar (`$pr` / `$calver` /
+  `$workdir`) is resolved by the engine and by each verb body's template; the
+  ENVIRONMENT form (`$env.NAME`, and `${env.NAME}` — the brace spelling is
+  equivalent) belongs to the verb body alone: it reads the PROCESS environment, and
+  a name that is not set there fails the step BY NAME instead of resolving to `""`.
 - **`charly pipeline agent`** — the bare runtime: direct chat-completions with a
   fully configurable system prompt, skills appended from the candies (`@github`
   refs), tools by reference.

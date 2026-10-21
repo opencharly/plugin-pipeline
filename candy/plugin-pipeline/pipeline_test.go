@@ -60,7 +60,7 @@ func TestProbeConfigAudit(t *testing.T) {
 }
 
 func TestResolveValue(t *testing.T) {
-	rc := &verbEnv{pr: "10140", calver: "2026.251.1200", workdir: t.TempDir(), env: map[string]string{"EVAL_REPO": "omacom/omarchy"}}
+	rc := &verbEnv{pr: "10140", calver: "2026.251.1200", workdir: t.TempDir(), procEnv: map[string]string{"EVAL_REPO": "omacom/omarchy"}}
 	if got := rc.resolveValue("pr-$pr"); got != "pr-10140" {
 		t.Fatalf("resolveValue = %v", got)
 	}

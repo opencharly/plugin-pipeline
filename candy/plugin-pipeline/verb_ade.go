@@ -23,24 +23,23 @@ func runVerbAde(in params.PipelineAdeInput, e *verbEnv) (map[string]any, error) 
 // adeLaneHead: the lane's head sha for the external check-run fallback.
 //
 // It is a MAP READ of the run context (`rc.env["PR_HEAD_SHA"]`), never
-// `resolveRefs("$env.PR_HEAD_SHA")`. refs.go does carry the `$env.X` grammar that
-// reads this key, but that grammar is DEAD on this path: a verb reached standalone
-// is wired to the IDENTITY resolver (verb_env.go:standaloneVerbEnv — the caller's
-// plan already owns ref resolution), and that is the only production `verbEnv`
-// constructor in the package. So `resolveRefs` hands back the LITERAL
-// `$env.PR_HEAD_SHA`, and the fallback would render
-// `--var PR_HEAD_SHA=$env.PR_HEAD_SHA` — a string that LOOKS like a head and is
-// therefore carried into the bed's evidence as one.
+// `resolveRefs("$env.PR_HEAD_SHA")`. The grammar that would serve the ref form is
+// LIVE — it reads the PROCESS environment now (refs.go:substituteEnvRefs, supplied
+// by standaloneVerbEnv) — and that is exactly why it is the wrong source here: the
+// process environment is the one the concurrent lanes SHARE, so it carries the
+// operator's pinned value or nothing, never this lane's head. The predecessor read
+// os.Getenv("PR_HEAD_SHA") for the same reason and the live lane logged
+// `--var PR_HEAD_SHA=` while its run context carried a real sha (RCA 2026.252.2210).
+// A ref would therefore hand the fallback the process value, a string that LOOKS
+// like a head and is carried into the bed's evidence as one.
 //
-// The predecessor read os.Getenv("PR_HEAD_SHA"), the process-global the concurrent
-// lanes share, and the live lane logged `--var PR_HEAD_SHA=` while its run context
-// carried a real sha (RCA 2026.252.2210). The retired in-process executor instead
-// BOUND this key per run (headSHA(pr, repo), an operator pin winning); this method
-// is that same lookup, restored.
+// The retired in-process executor BOUND this key per run here (`rc.env["PR_HEAD_SHA"]
+// = headSHA(pr, repo)`, an operator pin winning); this method is that same lookup,
+// restored as the map it read.
 //
 // A standalone dispatch carries no per-run map, so the read yields "": the honest
 // signal that no lane head reached the fallback. A missing run context is honest;
-// a literal ref is a wrong answer that looks like a real one.
+// the process environment's value is a wrong answer that looks like a real one.
 func (e *verbEnv) adeLaneHead() string {
 	if e == nil {
 		return ""

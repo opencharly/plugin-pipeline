@@ -26,7 +26,22 @@ var validTransforms = map[string]bool{"negate": true, "json": true, "yaml": true
 // workdir (the SAME contract for both the `generate` and `emit` stage kinds —
 // one implementation, R3). Non-zero exit fails the stage: the artifact never
 // ships unvalidated.
+//
+// THE SHELL BOUNDARY. This is the ONE field whose text is handed to `bash -c`, so
+// an environment VALUE substituted into it would become SCRIPT TEXT — the single
+// injection surface the ref grammar must not open. The shell already has the safe
+// mechanism and needs no help: `${NAME}` is expanded by bash from the environment
+// the child inherits (exec.Command with a nil Env inherits the parent's), and
+// metacharacters inside a variable's value are never re-parsed as syntax. So an
+// env REF here is REFUSED with that replacement named, rather than spliced — the
+// discipline the emit grammar already applies to an unresolved marker: a hard
+// error, never a silent passthrough. Every other ref ($pr/$workdir/@stage) still
+// resolves as data.
 func runAuthoredValidator(rc *verbEnv, v string) error {
+	if name, ok := envRefName(v); ok {
+		return errString("validate: environment reference " + name + " in a shell command — a validate: script runs under bash, where ${" + name +
+			"} reads the inherited environment and the value never becomes script text; author that instead of a $env./${env.} data reference")
+	}
 	cmd := rc.resolveRefs(v)
 	c := exec.Command("bash", "-c", cmd)
 	c.Dir = rc.workdir
