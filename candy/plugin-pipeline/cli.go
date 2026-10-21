@@ -319,11 +319,11 @@ func flagAfter(args []string, name string) string {
 //
 // The run leg carries TWO dispatch inputs, both consumed by the engine:
 //
-//   - `--args-json <json-object>` → WorkflowRunRequest.Args, an object of STRING
-//     values (the envelope field is typed `map[string]string`, not `any`). The
-//     lowering emits `-p NAME="$NAME"` for every declared arg, so an arg the
-//     front-end never passes reaches the engine as an EMPTY value; a malformed
-//     document or a non-string member is therefore a NAMED error here, never a
+//   - `--args-json <json-object>` → WorkflowRunRequest.Args, an object whose values
+//     are the wire's admitted shape (`#WorkflowArgVal`): a STRING, or a FLAT LIST of
+//     STRINGs. The lowering emits `-p NAME="$NAME"` for every declared arg, so an arg
+//     the front-end never passes reaches the engine as an EMPTY value; a malformed
+//     document or a value outside that shape is therefore a NAMED error here, never a
 //     silently-empty arg.
 //   - `--mode human|tool` → WorkflowRunRequest.Mode, which selects the engine's
 //     human/tool envelope. ABSENT leaves Mode empty ON PURPOSE: the engine owns its
@@ -341,15 +341,20 @@ func workflowRunParams(name, genDir string, rest []string) ([]byte, error) {
 }
 
 // runDispatchFlags parses and validates the run leg's dispatch flags out of rest.
-func runDispatchFlags(name string, rest []string) (map[string]string, string, error) {
-	var args map[string]string
+func runDispatchFlags(name string, rest []string) (map[string]any, string, error) {
+	var args map[string]any
 	if has(rest, "--args-json") {
 		raw := flagAfter(rest, "--args-json")
 		if uerr := json.Unmarshal([]byte(raw), &args); uerr != nil {
-			return nil, "", fmt.Errorf("pipeline run %s: --args-json: %v (want a JSON object of STRING values, e.g. '{\"who\":\"world\"}')", name, uerr)
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: %v (want a JSON object whose values are STRINGS or FLAT LISTS of strings, e.g. '{\"who\":\"world\",\"prs\":[\"1\",\"2\"]}')", name, uerr)
 		}
 		if args == nil {
-			return nil, "", fmt.Errorf("pipeline run %s: --args-json: want a JSON object of STRING values, e.g. '{\"who\":\"world\"}' (got %q)", name, raw)
+			return nil, "", fmt.Errorf("pipeline run %s: --args-json: want a JSON object whose values are STRINGS or FLAT LISTS of strings, e.g. '{\"who\":\"world\",\"prs\":[\"1\",\"2\"]}' (got %q)", name, raw)
+		}
+		for k, v := range args {
+			if !workflowArgValue(v) {
+				return nil, "", fmt.Errorf("pipeline run %s: --args-json: arg %q: want a STRING or a FLAT LIST of STRINGs, got %v", name, k, v)
+			}
 		}
 	}
 	mode := ""
@@ -360,6 +365,29 @@ func runDispatchFlags(name string, rest []string) (map[string]string, string, er
 		}
 	}
 	return args, mode, nil
+}
+
+// workflowArgValue reports whether v is a value the workflow-arg wire admits.
+// `#WorkflowArgVal` (`spec/schema/workflow.cue`) is a STRING or a FLAT sequence of
+// STRINGs — the widening admits a list, not every JSON value. Before the widening this
+// validator was `json.Unmarshal` into `map[string]string`, which refused a list; it now
+// admits one while still refusing what it refused before (objects, numbers, booleans,
+// null, and a list nested inside a list) — so no document that validated before stops
+// validating, and a value the engine cannot render as `-p NAME="$NAME"` stays a NAMED
+// error here rather than a silently-empty arg.
+func workflowArgValue(v any) bool {
+	switch t := v.(type) {
+	case string:
+		return true
+	case []any:
+		for _, e := range t {
+			if _, ok := e.(string); !ok {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // genDirOf is the ONE definition of a pipeline's generated-state directory — the
