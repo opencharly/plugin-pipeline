@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -159,11 +160,11 @@ func TestCLIRunDryRun_UnknownEntityNamesTheCause(t *testing.T) {
 }
 
 // TestRunDispatchFlags_LockTheEnvelope: the run leg's dispatch inputs reach the engine
-// envelope VERBATIM — `--args-json` as the typed map[string]string and `--mode` as
-// given — and an ABSENT flag stays absent so the engine keeps its own default. This is
-// the plumbing lock: workflowRunParams builds the exact ParamsJson bytes the front-end
-// hands to InvokeProvider, so asserting on it exercises the real dispatch payload
-// without stubbing the engine boundary.
+// envelope VERBATIM — `--args-json` as the typed `map[string]any` the wire declares
+// (`#WorkflowArgVal`) and `--mode` as given — and an ABSENT flag stays absent so the
+// engine keeps its own default. This is the plumbing lock: workflowRunParams builds the
+// exact ParamsJson bytes the front-end hands to InvokeProvider, so asserting on it
+// exercises the real dispatch payload without stubbing the engine boundary.
 func TestRunDispatchFlags_LockTheEnvelope(t *testing.T) {
 	const genDir = "/proj/.opencharly/pipelines/mixed-plan"
 	params, err := workflowRunParams("mixed-plan", genDir,
@@ -216,6 +217,68 @@ func TestRunDispatchFlags_LockTheEnvelope(t *testing.T) {
 	}
 }
 
+// TestRunDispatchFlags_ScalarOnlyDocumentRoundTrips: `#WorkflowArgVal` only GREW the
+// admitted value set, so a scalar-only args document — the ONLY shape that validated
+// before the widening — must still validate, reach the engine envelope value for value,
+// and survive the envelope's own JSON round trip unchanged. This is the widening's R4
+// lock: it admits a list, and it changes neither the wire key nor the shape of a scalar.
+func TestRunDispatchFlags_ScalarOnlyDocumentRoundTrips(t *testing.T) {
+	const genDir = "/proj/.opencharly/pipelines/mixed-plan"
+	params, err := workflowRunParams("mixed-plan", genDir,
+		[]string{"run", "mixed-plan", "--args-json", `{"who":"world","n":"3","empty":""}`})
+	if err != nil {
+		t.Fatalf("a scalar-only args document that validated before the widening must still validate: %v", err)
+	}
+	var req spec.WorkflowRunRequest
+	if uerr := json.Unmarshal(params, &req); uerr != nil {
+		t.Fatalf("the dispatched ParamsJson must decode into the envelope: %v\n%s", uerr, params)
+	}
+	want := map[string]any{"who": "world", "n": "3", "empty": ""}
+	if !reflect.DeepEqual(req.Args, want) {
+		t.Fatalf("args = %#v, want %#v (every scalar must arrive as the SAME string)", req.Args, want)
+	}
+	// Re-encode the DECODED envelope: the args keep their values through the wire's own
+	// marshalling, so the engine receives the document the front-end validated.
+	again, merr := json.Marshal(req)
+	if merr != nil {
+		t.Fatalf("re-encode the envelope: %v", merr)
+	}
+	if string(again) != string(params) {
+		t.Fatalf("scalar-only round trip changed the payload:\n before %s\n after  %s", params, again)
+	}
+}
+
+// TestRunDispatchFlags_AdmitsFlatListValue: the widening's whole point — one arg value
+// may be a FLAT LIST of STRINGs (the collection a `lanes:` run fans out over), beside
+// scalar members, with the wire key and every scalar untouched.
+func TestRunDispatchFlags_AdmitsFlatListValue(t *testing.T) {
+	const genDir = "/proj/.opencharly/pipelines/mixed-plan"
+	params, err := workflowRunParams("mixed-plan", genDir,
+		[]string{"run", "mixed-plan", "--args-json", `{"who":"world","prs":["1","2","3"]}`})
+	if err != nil {
+		t.Fatalf("a flat list of strings is an admitted #WorkflowArgVal, got: %v", err)
+	}
+	var req spec.WorkflowRunRequest
+	if uerr := json.Unmarshal(params, &req); uerr != nil {
+		t.Fatalf("the dispatched ParamsJson must decode into the envelope: %v\n%s", uerr, params)
+	}
+	if req.Args["who"] != "world" {
+		t.Fatalf("the scalar member must be unchanged, got %#v", req.Args)
+	}
+	got, ok := req.Args["prs"].([]any)
+	if !ok {
+		t.Fatalf("the list member must cross the wire as a list, got %T (%#v)", req.Args["prs"], req.Args["prs"])
+	}
+	if len(got) != 3 {
+		t.Fatalf("list member length = %d, want 3 (%#v)", len(got), got)
+	}
+	for i, want := range []string{"1", "2", "3"} {
+		if got[i] != want {
+			t.Fatalf("list member[%d] = %#v, want %q (order and value must be verbatim)", i, got[i], want)
+		}
+	}
+}
+
 // TestCLIRun_RejectsMalformedDispatchFlags: a malformed dispatch flag is a NAMED error
 // with exit 1 — never a silently-empty arg (the lowering emits `-p NAME="$NAME"` for
 // every declared arg) and never the wrong engine envelope. The parse runs BEFORE the
@@ -229,6 +292,10 @@ func TestCLIRun_RejectsMalformedDispatchFlags(t *testing.T) {
 	}{
 		{"truncated json", []string{"run", "mixed-plan", "--args-json", "{"}, "--args-json"},
 		{"non-string member", []string{"run", "mixed-plan", "--args-json", `{"n":3}`}, "--args-json"},
+		{"boolean member", []string{"run", "mixed-plan", "--args-json", `{"m":true}`}, "--args-json"},
+		{"object member", []string{"run", "mixed-plan", "--args-json", `{"m":{"a":"b"}}`}, "--args-json"},
+		{"nested list member", []string{"run", "mixed-plan", "--args-json", `{"m":[["1"]]}`}, "--args-json"},
+		{"list with a non-string", []string{"run", "mixed-plan", "--args-json", `{"m":["1",2]}`}, "--args-json"},
 		{"json null", []string{"run", "mixed-plan", "--args-json", "null"}, "--args-json"},
 		{"json array", []string{"run", "mixed-plan", "--args-json", `["a"]`}, "--args-json"},
 		{"empty value", []string{"run", "mixed-plan", "--args-json", ""}, "--args-json"},
@@ -270,5 +337,14 @@ func TestCLIRunAcceptsDispatchFlags_BeforeTheExecutorCheck(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "--args-json") || strings.Contains(err.Error(), "--mode") {
 		t.Fatalf("a well-formed flag pair must not produce a flag error: %v", err)
+	}
+	// The widened value shape takes the SAME path: a flat list of strings is admitted by
+	// the CLI surface, so the run leg reaches the dispatch point instead of a flag error.
+	code, err = runCLI([]string{"run", "mixed-plan", "--args-json", `{"prs":["1","2"]}`}, nil)
+	if err == nil || code != 1 {
+		t.Fatalf("with no executor a list-valued run must stop at the executor error: code=%d err=%v", code, err)
+	}
+	if !strings.Contains(err.Error(), "no host executor") {
+		t.Fatalf("a flat list of strings must be admitted by --args-json, got: %v", err)
 	}
 }
