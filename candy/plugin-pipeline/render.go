@@ -15,7 +15,7 @@ import (
 // (runGenerate) lives in verb_generate.go, its lifted verb: it is registered as
 // verb:generate and reachable from any plan.
 
-var tmplRe = regexp.MustCompile("\\$\\{[A-Za-z0-9_.]+(:[a-z]+)?\\}|\\$(pr|calver|workdir)|\\$env\\.([A-Z0-9_]+)|@[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)?")
+var tmplRe = regexp.MustCompile(`\$\{[A-Za-z0-9_.]+(:[a-z]+)?\}|\$(pr|calver|workdir)|\$env\.([A-Z0-9_]+)|@[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)?`)
 
 // validTransforms: the closed set of per-marker transforms. An unknown transform
 // is a hard generate error (never a silent no-op — a `:negte` typo must not
@@ -200,13 +200,6 @@ func negateChecks(raw map[string]any) bool {
 type errString string
 
 func (e errString) Error() string { return string(e) }
-
-func resolveTemplate(raw map[string]any) string {
-	if t, ok := raw["_template"].(string); ok {
-		return t
-	}
-	return ""
-}
 
 // validateFrontmatter: the INLINE frontmatter JSON schema (a minimal validator
 // for the eval lane — the work-lane fields).

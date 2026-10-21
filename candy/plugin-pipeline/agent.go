@@ -97,20 +97,6 @@ func runAgentTurns(ctx context.Context, rc *verbEnv, systemPrompt, prompt string
 	return "", fmt.Errorf("agent: turn budget exhausted")
 }
 
-// lastVerdict: scan the transcript backwards for the last non-empty assistant
-// content containing a verdict JSON (the graceful-degradation contract).
-func lastVerdict(msgs []chatMsg) string {
-	for i := len(msgs) - 1; i >= 0; i-- {
-		if msgs[i].Role == "assistant" && msgs[i].Content != nil {
-			c := *msgs[i].Content
-			if strings.Contains(c, "\"verdict\"") {
-				return c
-			}
-		}
-	}
-	return ""
-}
-
 // skillCorpus resolves the entity's skills.corpus to the directory holding
 // <skill-name>/SKILL.md. The corpus value is REF-RESOLVED ($env.NAME / $workdir /
 // ...) so a lane can point at a generated corpus outside its own tree (e.g.

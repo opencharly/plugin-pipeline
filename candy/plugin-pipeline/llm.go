@@ -36,11 +36,8 @@ var errNotANumber = errors.New("not a number")
 // messages and the tool dispatcher keys off ToolCall{ID,Name,Arguments}, so the
 // aliases keep agent.go unchanged while the storage is the shared type.
 
-// chatMsg / chatToolCall are the shared client's transcript types.
-type (
-	chatMsg      = llmkit.Message
-	chatToolCall = llmkit.ToolCall
-)
+// chatMsg is the shared client's transcript type.
+type chatMsg = llmkit.Message
 
 // resolveLLM applies the engine's documented precedence FIELD-WISE: a lower layer
 // fills only what the higher layers left unset (env > stage > entity > built-in
