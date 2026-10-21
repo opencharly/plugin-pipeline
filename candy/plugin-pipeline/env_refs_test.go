@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
@@ -196,3 +198,81 @@ func TestEnvRefResolvesFromATypedInput(t *testing.T) {
 		t.Fatalf("typed-input ref = %q, want %q", got, "approve == approve")
 	}
 }
+
+// TestEnvRefsAcrossConcurrentDispatches pins the CONCURRENCY contract of the
+// resolver's mutable state. `substituteEnvRefs` appends to `rc.missingEnv` and
+// `invokeLiftedVerb` reads it afterwards, so a `verbEnv` shared by two dispatches
+// would be a data race and, worse, would attribute one stage's missing variable to
+// another stage's verdict.
+//
+// The per-dispatch construction is what makes that impossible: `invokeLiftedVerb`
+// builds its OWN `verbEnv` per Invoke (verb_env.go:standaloneVerbEnv), and the ref
+// grammar only ever runs against that instance. This test exercises it the way the
+// engine does — several dispatches in flight at once — and asserts each verdict
+// carries ITS OWN variable and nothing else. Run under `-race`, it fails on any
+// sharing.
+func TestEnvRefsAcrossConcurrentDispatches(t *testing.T) {
+	const workers = 8
+	// The FIRST half resolve; the SECOND half name a variable that is deliberately
+	// absent — so the miss list is touched CONCURRENTLY with the resolving arm, which
+	// is what makes a shared accumulator both a data race and a cross-attribution bug.
+	const absent = "PIPELINE_PROBE_CONCURRENT_ABSENT"
+	if err := os.Unsetenv(absent); err != nil {
+		t.Fatalf("unset %s: %v", absent, err)
+	}
+	names := make([]string, workers)
+	for i := 0; i < workers; i++ {
+		if i < workers/2 {
+			names[i] = envName(i)
+			t.Setenv(names[i], "approve")
+		} else {
+			names[i] = absent + "_" + strconv.Itoa(i)
+			if err := os.Unsetenv(names[i]); err != nil {
+				t.Fatalf("unset %s: %v", names[i], err)
+			}
+		}
+	}
+
+	type res struct {
+		i int
+		v verbVerdict
+	}
+	out := make(chan res, workers*3)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		for j := 0; j < 3; j++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				out <- res{i, dispatchVerb(t, "gate", map[string]any{
+					"condition": "approve == ${env." + names[i] + "}",
+				})}
+			}(i)
+		}
+	}
+	wg.Wait()
+	close(out)
+	for r := range out {
+		resolving := r.i < workers/2
+		if resolving {
+			if r.v.Status != "pass" {
+				t.Errorf("worker %d: status = %q (%q), want pass — its own variable did not resolve", r.i, r.v.Status, r.v.Message)
+			}
+			if strings.Contains(r.v.Message, "unresolved environment reference") {
+				t.Errorf("worker %d: verdict reports a MISS (%q) though its own variable is set — the miss list leaked across dispatches", r.i, r.v.Message)
+			}
+			continue
+		}
+		if r.v.Status != "fail" || !strings.Contains(r.v.Message, names[r.i]) {
+			t.Fatalf("worker %d: verdict = %q (%q), want a fail naming %s", r.i, r.v.Status, r.v.Message, names[r.i])
+		}
+		for k := workers / 2; k < workers; k++ {
+			if k != r.i && strings.Contains(r.v.Message, names[k]) {
+				t.Errorf("worker %d: verdict names ANOTHER dispatch's variable %s (%q) — the miss list is shared", r.i, names[k], r.v.Message)
+			}
+		}
+	}
+}
+
+// envName is the per-worker variable name the concurrency test binds.
+func envName(i int) string { return "PIPELINE_PROBE_CONCURRENT_" + strconv.Itoa(i) }
