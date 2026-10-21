@@ -62,7 +62,7 @@ func writeSSEEmpty(rw http.ResponseWriter) {
 func writeSSERaw(rw http.ResponseWriter, payloads ...string) {
 	sseStart(rw)
 	for _, p := range payloads {
-		fmt.Fprintf(rw, "data: %s\n\n", p)
+		_, _ = fmt.Fprintf(rw, "data: %s\n\n", p)
 		flush(rw)
 	}
 	sseDone(rw)
@@ -88,24 +88,6 @@ func writeSSEToolCall(rw http.ResponseWriter, id, name, args string) {
 	writeSSERaw(rw, payloads...)
 }
 
-// writeSSEContentThenToolCall emits prose followed by a tool call — the shape a
-// model uses when it narrates and then calls a tool.
-func writeSSEContentThenToolCall(rw http.ResponseWriter, content, id, name, args string) {
-	deltas := []map[string]any{
-		sseChunk(map[string]any{"role": "assistant", "content": content}),
-		sseChunk(map[string]any{"tool_calls": []any{
-			map[string]any{"index": 0, "id": id, "type": "function",
-				"function": map[string]any{"name": name, "arguments": args}},
-		}}),
-	}
-	payloads := make([]string, 0, len(deltas))
-	for _, d := range deltas {
-		b, _ := json.Marshal(d)
-		payloads = append(payloads, string(b))
-	}
-	writeSSERaw(rw, payloads...)
-}
-
 func sseStart(rw http.ResponseWriter) {
 	rw.Header().Set("Content-Type", "text/event-stream")
 	rw.WriteHeader(http.StatusOK)
@@ -113,13 +95,13 @@ func sseStart(rw http.ResponseWriter) {
 }
 
 func sseDone(rw http.ResponseWriter) {
-	fmt.Fprint(rw, "data: [DONE]\n\n")
+	_, _ = fmt.Fprint(rw, "data: [DONE]\n\n")
 	flush(rw)
 }
 
 func writeSSEChunk(rw http.ResponseWriter, chunk map[string]any) {
 	b, _ := json.Marshal(chunk)
-	fmt.Fprintf(rw, "data: %s\n\n", b)
+	_, _ = fmt.Fprintf(rw, "data: %s\n\n", b)
 	flush(rw)
 }
 

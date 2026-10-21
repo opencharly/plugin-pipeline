@@ -340,21 +340,6 @@ func probeSequencing(input map[string]any) (bool, string) {
 	return probeGoldenPresent(input)
 }
 
-func probeResolveChannel(input map[string]any) (bool, string) {
-	channels := mm(input["channels"])
-	def := s(input["default"])
-	if def == "" {
-		def = "stable"
-	}
-	if len(channels) == 0 {
-		return false, "resolve_channel: no channels registry"
-	}
-	if _, ok := channels[def]; !ok {
-		return false, "resolve_channel: default not in registry: " + def
-	}
-	return true, ""
-}
-
 func probeConfigAudit(input map[string]any) (bool, string) {
 	bed := s(input["bed"])
 	if bed == "" {

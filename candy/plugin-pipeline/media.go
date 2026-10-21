@@ -2,14 +2,11 @@ package pluginpipeline
 
 import (
 	"path/filepath"
-	"regexp"
 )
 
 // media.go — the ENGINE-NATIVE media stage: assemble the run's /tmp artifacts
 // into the configured dir and transcode the MJPEG to screen.mp4 (in-process call
 // to the ffmpeg binary — a real tool, never a charly subprocess).
-
-var calverRe = regexp.MustCompile("[0-9]{3,}") // extract calver from a run dir when not passed
 
 // mediaDir resolves the media stage's output dir. Precedence: the stage's own
 // dir: (if authored), then the pipeline-level media.dir (the lane's ONE layout
