@@ -17,8 +17,9 @@ description: 'The `charly pipeline` workflow front-end — resolve/validate/lowe
 
 - the bare agent runtime (the standalone `charly pipeline agent`);
 - the run leg — `charly pipeline run <entity>`: resolve the authored
-  `kind: pipeline` entity, validate it with `sdk/workflowkit.ValidatePipeline`,
-  lower it with `sdk/workflowkit.Lower` to `workflow.lobster` + a generated
+  `kind: pipeline` entity (whose body this plugin declares as `#Pipeline` /
+  `#PipelineValue`), validate it with `workflowkit.ValidatePipeline`, lower it with
+  `workflowkit.Lower` to `workflow.lobster` + a generated
   `charly.yml`, and dispatch the pair to the `workflow` provider class as
   `workflow-run` (the workflow ENGINE owns execution, control flow, redo, and
   iteration);
@@ -28,8 +29,8 @@ description: 'The `charly pipeline` workflow front-end — resolve/validate/lowe
   (`verb:agent/probe/ade/generate/emit/media/gate`);
 - skills by `@github` candy refs.
 
-Every workflow is a DECLARED pipeline (`kind:pipeline` entity: `spec.Pipeline`
-with `steps:`), so the engine is config-driven rather than code-driven.
+Every workflow is a DECLARED pipeline (`kind:pipeline` entity: this plugin's own
+`#Pipeline` with `steps:`), so the engine is config-driven rather than code-driven.
 
 ## When to use it
 

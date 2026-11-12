@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/workflowkit"
 	"github.com/opencharly/sdk"
-	"github.com/opencharly/sdk/workflowkit"
 	"github.com/opencharly/spec/ops"
 	"github.com/opencharly/spec/spec"
 )
@@ -25,7 +26,7 @@ import (
 //	pipeline --self-test
 //
 // `run` is the FRONT-END leg: it resolves the entity, validates it with
-// sdk/workflowkit, lowers it to the (workflow.lobster, charly.yml) pair, and
+// workflowkit, lowers it to the (workflow.lobster, charly.yml) pair, and
 // dispatches the pair to the `workflow` provider class as OpWorkflowRun. The
 // engine (plugin-lobster today) owns execution; this command never runs a step
 // itself. `--dry-run` stops after the lowering (validate + lower, no dispatch).
@@ -419,7 +420,7 @@ type scheduleDescriptor struct {
 // so `apply` after a trigger edit would install units for a cron the operator has already
 // changed. `apply` is therefore self-contained — it loads, projects, writes, and only
 // then dispatches.
-func writeScheduleDescriptor(name, genDir string, trigs []spec.PipelineTrigger) error {
+func writeScheduleDescriptor(name, genDir string, trigs []params.PipelineTrigger) error {
 	desc := scheduleDescriptor{Pipeline: name, Triggers: make([]spec.WorkflowTrigger, 0, len(trigs))}
 	for _, t := range trigs {
 		desc.Triggers = append(desc.Triggers, spec.WorkflowTrigger{

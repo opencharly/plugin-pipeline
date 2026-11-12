@@ -17,12 +17,12 @@ lifted stage verbs.
 |---|---|
 | `command:pipeline` | `charly pipeline run <entity>` and `charly pipeline agent` |
 | `verb:pipeline` | deterministic probe verbs |
-| `kind:pipeline` | the `kind: pipeline` entity (`steps:`, validated by `sdk/workflowkit`) |
+| `kind:pipeline` | the `kind: pipeline` entity (`steps:`), declared by this plugin (`#Pipeline`/`#PipelineValue`) and validated by its own `workflowkit` |
 | `verb:agent` … `verb:gate` | the seven lifted stage verbs |
 
 - **`charly pipeline run <entity>`** — resolve a `kind: pipeline` entity from
-  `charly.yml`, validate it with `sdk/workflowkit.ValidatePipeline`, lower it with
-  `sdk/workflowkit.Lower` to `workflow.lobster` + a generated `charly.yml`, and
+  `charly.yml`, validate it with `workflowkit.ValidatePipeline`, lower it with
+  `workflowkit.Lower` to `workflow.lobster` + a generated `charly.yml`, and
   dispatch the pair to the `workflow` provider class as `workflow-run`. The
   ENGINE owns execution, control flow, redo, and iteration. `--dry-run` validates
   and lowers without dispatching. The two dispatch inputs travel on the request:

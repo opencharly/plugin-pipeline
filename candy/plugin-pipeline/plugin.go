@@ -1,6 +1,6 @@
 // Package pluginpipeline — the workflow FRONT-END (domain-neutral).
 // Provides: kind:pipeline (a declared `steps:` workflow as a charly.yml entity,
-// validated by sdk/workflowkit), command:pipeline (the CLI + the standalone agent
+// validated by this repo's workflowkit), command:pipeline (the CLI + the standalone agent
 // runtime), verb:pipeline (deterministic probes), and the seven LIFTED WORKFLOW
 // VERBS (verb:agent/probe/ade/generate/emit/media/gate, each reachable as a
 // `<word>: <input>` step from any plan).
@@ -14,10 +14,10 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/workflowkit"
 	"github.com/opencharly/sdk"
-	"github.com/opencharly/sdk/workflowkit"
 	pb "github.com/opencharly/spec/proto"
-	"github.com/opencharly/spec/spec"
 )
 
 //go:embed schema/*.cue
@@ -97,7 +97,7 @@ func (provider) Invoke(ctx context.Context, req *pb.InvokeRequest) (*pb.InvokeRe
 		}
 
 	case req.GetOp() == sdk.OpLoad: // kind decode: validate the entity body against #PipelineValue
-		var body spec.Pipeline
+		var body params.Pipeline
 		if len(req.GetParamsJson()) > 0 {
 			if err := json.Unmarshal(req.GetParamsJson(), &body); err != nil {
 				return nil, fmt.Errorf("pipeline entity decode: %w", err)

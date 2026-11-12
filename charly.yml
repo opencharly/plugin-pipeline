@@ -28,8 +28,8 @@ check-pipeline-app:
 
 # check-pipeline-local — the R10 witness for the front-end: the hard cutover from the
 # retired home-grown pipeline grammar (a stage list / #*Stage / the in-process executor) to
-# the wave design — the authored entity is `spec.Pipeline` (`steps:`), validated by
-# sdk/workflowkit.ValidatePipeline, lowered by sdk/workflowkit.Lower to the
+# the wave design — the authored entity is this plugin's own `#Pipeline` (`steps:`),
+# validated by workflowkit.ValidatePipeline, lowered by workflowkit.Lower to the
 # (workflow.lobster, charly.yml) pair, and dispatched to the `workflow` provider class as
 # workflow-run. Every step runs `${CHARLY_BIN}` host-side in a mktemp project, so the
 # front-end's OWN resolution/validation/lowering is what is being graded:
@@ -66,7 +66,7 @@ check-pipeline-local:
         lifecycle: dev
         description: >-
             The workflow front-end's R10 witness: `charly pipeline validate|run` resolves,
-            validates and lowers an authored `kind:pipeline` (spec.Pipeline, `steps:`) and
+            validates and lowers an authored `kind:pipeline` (#Pipeline, `steps:`) and
             dispatches the lowered pair to the workflow engine — the hard cutover off the
             retired stage-list/#*Stage in-process executor, proven on a disposable local deploy.
         plan:

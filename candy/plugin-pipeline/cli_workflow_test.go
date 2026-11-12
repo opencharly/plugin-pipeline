@@ -13,7 +13,7 @@ import (
 )
 
 // cli_workflow_test.go — the RUN-LEG proof for the hard cutover: `charly pipeline
-// run <entity> --dry-run` resolves the authored spec.Pipeline entity, validates it
+// run <entity> --dry-run` resolves the authored params.Pipeline entity, validates it
 // with workflowkit.ValidatePipeline, and lowers the (workflow.lobster, charly.yml)
 // pair to the generation dir WITHOUT dispatching (dispatch needs the `workflow`
 // engine, which is not this plugin). No executor is needed for either leg, so the
@@ -59,7 +59,7 @@ func writeProject(t *testing.T, body string) string {
 	return dir
 }
 
-// TestCLIValidate_AcceptsMixedGrammar: the new grammar is spec.Pipeline (`steps:`),
+// TestCLIValidate_AcceptsMixedGrammar: the new grammar is params.Pipeline (`steps:`),
 // and a step may carry either a lobster arm (`run:`) or a builtin-verb plan step.
 func TestCLIValidate_AcceptsMixedGrammar(t *testing.T) {
 	writeProject(t, mixedGrammarPlan)
