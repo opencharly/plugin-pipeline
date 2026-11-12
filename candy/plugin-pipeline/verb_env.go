@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk"
 	pb "github.com/opencharly/spec/proto"
+	"github.com/opencharly/spec/spec"
 )
 
 // verb_env.go — the LIFTED-VERB contract. Each of the seven workflow stage kinds
@@ -52,7 +52,7 @@ type verbEnv struct {
 	report  map[string]any
 	media   map[string]any
 	skills  map[string]any
-	llm     params.LLMSpec
+	llm     spec.LLMSpec
 	pr      string
 	repo    string
 	calver  string

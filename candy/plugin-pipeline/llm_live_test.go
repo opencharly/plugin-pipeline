@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk/llmkit"
+	"github.com/opencharly/spec/spec"
 )
 
 // solidDataURL renders a w x h solid-RGB PNG as an OpenAI image data URL.
@@ -94,11 +94,11 @@ func TestLive_OllamaAuthoredParams(t *testing.T) {
 
 	temp := 0.1
 	maxTok := int64(64)
-	rc := &verbEnv{llm: params.LLMSpec{
+	rc := &verbEnv{llm: spec.LLMSpec{
 		Base_url:     liveBaseURL,
 		Model:        liveModel(),
 		Idle_timeout: "3m",
-		Params: params.LLMParams{
+		Params: spec.LLMParams{
 			Temperature: &temp,
 			Max_tokens:  &maxTok,
 		},

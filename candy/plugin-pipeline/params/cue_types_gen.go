@@ -2,282 +2,123 @@
 
 package params
 
+import (
+	"github.com/opencharly/spec/spec"
+)
+
 // #OutputType: the typed-output contract an agent stage declares per output field.
 type OutputType struct {
-	Type string `json:"type"`
+	Type string `yaml:"type,omitempty" json:"type"`
 
-	Enum []string `json:"enum,omitempty"`
+	Enum []string `yaml:"enum,omitempty" json:"enum,omitempty"`
 
-	Description string `json:"description,omitempty"`
+	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 }
 
 // #RedoSpec: the per-stage redo/retry policy.
 type RedoSpec struct {
-	On_fail any/* CUE disjunction: (string|list) */ `json:"on_fail,omitempty"`
+	On_fail any/* CUE disjunction: (string|list) */ `yaml:"on_fail,omitempty" json:"on_fail,omitempty"`
 
-	Triggers map[string]string `json:"triggers,omitempty"`
+	Triggers map[string]string `yaml:"triggers,omitempty" json:"triggers,omitempty"`
 
-	Max int64 `json:"max,omitempty"`
+	Max int64 `yaml:"max,omitempty" json:"max,omitempty"`
 
-	Escalate_after int64 `json:"escalate_after,omitempty"`
+	Escalate_after int64 `yaml:"escalate_after,omitempty" json:"escalate_after,omitempty"`
 }
 
 // #CacheSpec: the committed-artifact cache for an agent's output, keyed by freshness.
 type CacheSpec struct {
-	Path string `json:"path"`
+	Path string `yaml:"path,omitempty" json:"path"`
 
-	Key string `json:"key"`
+	Key string `yaml:"key,omitempty" json:"key"`
 
-	Key_field string `json:"key_field,omitempty"`
+	Key_field string `yaml:"key_field,omitempty" json:"key_field,omitempty"`
 
-	Source string `json:"source,omitempty"`
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
 }
 
 // #MediaSpec: the pipeline-level media gate config.
 type MediaSpec struct {
-	Files []string `json:"files"`
+	Files []string `yaml:"files,omitempty" json:"files"`
 
-	Min map[string]int64 `json:"min"`
+	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
 
-	Dir string `json:"dir"`
+	Dir string `yaml:"dir,omitempty" json:"dir"`
 }
 
 // #ReportSpec: the report-rendering config a generate/emit stage carries.
 type ReportSpec struct {
-	Template string `json:"template"`
+	Template string `yaml:"template,omitempty" json:"template"`
 
-	Frontmatter_schema string `json:"frontmatter_schema,omitempty"`
+	Frontmatter_schema string `yaml:"frontmatter_schema,omitempty" json:"frontmatter_schema,omitempty"`
 
-	Bed_template string `json:"bed_template,omitempty"`
+	Bed_template string `yaml:"bed_template,omitempty" json:"bed_template,omitempty"`
 
-	Control_bed_template string `json:"control_bed_template,omitempty"`
+	Control_bed_template string `yaml:"control_bed_template,omitempty" json:"control_bed_template,omitempty"`
 }
 
 // Probe verb inputs (deterministic, engine-native).
 type MediaGateInput struct {
-	Dir string `json:"dir"`
+	Dir string `yaml:"dir,omitempty" json:"dir"`
 
-	Files []any/* CUE closed list */ `json:"files"`
+	Files []any/* CUE closed list */ `yaml:"files,omitempty" json:"files"`
 
-	Min map[string]int64 `json:"min"`
+	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
 }
 
 type LockAuditInput struct {
-	Trees []any /* CUE closed list */ `json:"trees"`
+	Trees []any /* CUE closed list */ `yaml:"trees,omitempty" json:"trees"`
 }
 
 type SequencingInput struct {
-	Bed_prefix string `json:"bed_prefix"`
+	Bed_prefix string `yaml:"bed_prefix,omitempty" json:"bed_prefix"`
 
-	Golden string `json:"golden"`
+	Golden string `yaml:"golden,omitempty" json:"golden"`
 }
 
 type HeadFreshnessInput struct {
-	Plan_sha string `json:"plan_sha"`
+	Plan_sha string `yaml:"plan_sha,omitempty" json:"plan_sha"`
 
-	Pr int64 `json:"pr"`
+	Pr int64 `yaml:"pr,omitempty" json:"pr"`
 
-	Repo string `json:"repo"`
+	Repo string `yaml:"repo,omitempty" json:"repo"`
 }
 
 type ConfigAuditInput struct {
-	Bed string `json:"bed"`
+	Bed string `yaml:"bed,omitempty" json:"bed"`
 
-	Pr int64 `json:"pr"`
+	Pr int64 `yaml:"pr,omitempty" json:"pr"`
 }
 
 type ResolveChannelInput struct {
-	Channel string `json:"channel"`
+	Channel string `yaml:"channel,omitempty" json:"channel"`
 
 	Channels map[string]struct {
-		Golden string `json:"golden"`
+		Golden string `yaml:"golden,omitempty" json:"golden"`
 
-		Provision string `json:"provision"`
-	} `json:"channels"`
+		Provision string `yaml:"provision,omitempty" json:"provision"`
+	} `yaml:"channels,omitempty" json:"channels"`
 }
 
 type EvidenceAuditInput struct {
-	Dir string `json:"dir"`
+	Dir string `yaml:"dir,omitempty" json:"dir"`
 
-	Files []any/* CUE closed list */ `json:"files"`
+	Files []any/* CUE closed list */ `yaml:"files,omitempty" json:"files"`
 
-	Min map[string]int64 `json:"min"`
+	Min map[string]int64 `yaml:"min,omitempty" json:"min"`
 
-	Trees []any/* CUE closed list */ `json:"trees"`
+	Trees []any/* CUE closed list */ `yaml:"trees,omitempty" json:"trees"`
 }
 
 // The P1 agent runtime input (the standalone + stage op).
 type AgentRunInput struct {
-	System_prompt string `json:"system_prompt"`
+	System_prompt string `yaml:"system_prompt,omitempty" json:"system_prompt"`
 
-	Prompt string `json:"prompt"`
+	Prompt string `yaml:"prompt,omitempty" json:"prompt"`
 
-	Skill []string `json:"skill,omitempty"`
+	Skill []string `yaml:"skill,omitempty" json:"skill,omitempty"`
 
-	Tools []string `json:"tools,omitempty"`
-}
-
-// ── The LLM surface (the OpenAI-compatible API) ─────────────────────────────
-//
-// #LLMSpec is the endpoint + connection config; #LLMParams is the GENERAL
-// request-parameter block applied to every completion the engine issues. Both
-// are CLOSED: an unknown or wrongly-typed field is a LOAD error, never a
-// silent drop (the `extra` escape hatch exists for genuinely undocumented
-// keys, and is the only place an arbitrary key is legal).
-//
-// Resolution precedence, applied FIELD-WISE (a lower layer fills only what the
-// higher layers left unset):
-//
-//	env override > stage llm block > entity llm block > built-in default
-//
-// The built-in default is the LOCAL ollama server (http://localhost:11434/v1,
-// deepseek-v4.1-flash:cloud) so a lane needs no authored block to run. An
-// empty RESOLVED api_key means ABSENT: the client sends NO Authorization
-// header at all (the local ollama needs none) — a missing secret can never
-// zero out another layer.
-//
-// api_key is REF-RESOLVED like every other authored string, so the correct
-// authoring is a reference — `api_key: $env.OPENAI_API_KEY` (or a secret ref) —
-// never a literal key committed to the repo.
-//
-// Every scalar the engine would otherwise hardcode is authorable here: the
-// sampling knobs, the token bound, the reasoning control, the structured-output
-// contract, the retry/idle policy, and the request metadata.
-type LLMSpec struct {
-	// base_url: the OpenAI-compatible endpoint root INCLUDING the /v1 suffix
-	// (e.g. http://localhost:11434/v1). The engine appends /chat/completions.
-	Base_url string `json:"base_url,omitempty"`
-
-	// model: the model identifier sent in the request (e.g. deepseek-v4.1-flash:cloud).
-	Model string `json:"model,omitempty"`
-
-	// api_key: bearer credential; empty/absent => NO auth header is sent.
-	Api_key string `json:"api_key,omitempty"`
-
-	// organization / project: sent as the OpenAI-Organization / OpenAI-Project
-	// headers for a multi-org key.
-	Organization string `json:"organization,omitempty"`
-
-	Project string `json:"project,omitempty"`
-
-	// timeout: a Go duration bounding the WHOLE request (e.g. "10m"). Empty
-	// means no whole-request deadline — the idle_timeout is the bound instead.
-	Timeout string `json:"timeout,omitempty"`
-
-	// idle_timeout: a Go duration bounding the gap BETWEEN streaming chunks.
-	// This is the primary liveness bound: a slow-but-progressing generation is
-	// never cut off, while a silent provider fails in bounded time.
-	Idle_timeout string `json:"idle_timeout,omitempty"`
-
-	// max_retries: automatic retries on a retryable HTTP status. Defaults to 2.
-	Max_retries *int64 `json:"max_retries,omitempty"`
-
-	// headers: extra request headers (e.g. an OpenRouter HTTP-Referer/X-Title).
-	Headers map[string]string `json:"headers,omitempty"`
-
-	// params: the general request parameters (see #LLMParams).
-	Params LLMParams `json:"params,omitempty"`
-}
-
-// #LLMParams is the general OpenAI chat-completions request parameter block.
-// Field names match the wire API exactly. All fields are OPTIONAL: an omitted
-// field is not sent at all (the server's own default applies), so the engine
-// never injects a value the author did not ask for.
-type LLMParams struct {
-	// temperature: sampling temperature (0..2).
-	Temperature *float64 `json:"temperature,omitempty"`
-
-	// top_p: nucleus sampling probability mass (0..1).
-	Top_p *float64 `json:"top_p,omitempty"`
-
-	// max_tokens: the completion token bound (ollama: num_predict).
-	Max_tokens *int64 `json:"max_tokens,omitempty"`
-
-	// max_completion_tokens: the newer alias of max_tokens.
-	Max_completion_tokens *int64 `json:"max_completion_tokens,omitempty"`
-
-	// frequency_penalty / presence_penalty: repetition controls (-2..2).
-	Frequency_penalty *float64 `json:"frequency_penalty,omitempty"`
-
-	Presence_penalty *float64 `json:"presence_penalty,omitempty"`
-
-	// seed: requests a reproducible generation where the server supports it.
-	Seed *int64 `json:"seed,omitempty"`
-
-	// stop: one stop sequence, or a list of them.
-	Stop any/* CUE disjunction: (string|list) */ `json:"stop,omitempty"`
-
-	// response_format: the structured-output contract (text | json_object |
-	// json_schema).
-	Response_format LLMResponseFormat `json:"response_format,omitempty"`
-
-	// reasoning_effort: thinking control for reasoning models ("none" disables
-	// thinking where the server honours it).
-	Reasoning_effort string `json:"reasoning_effort,omitempty"`
-
-	// reasoning: the object form of the same control (ollama accepts either).
-	Reasoning LLMReasoning `json:"reasoning,omitempty"`
-
-	// stream_options: streaming response options.
-	Stream_options LLMStreamOptions `json:"stream_options,omitempty"`
-
-	// parallel_tool_calls: permit the model to emit several tool calls per turn.
-	Parallel_tool_calls *bool `json:"parallel_tool_calls,omitempty"`
-
-	// tool_choice: "none" | "auto" | "required" | {function: {name}}.
-	Tool_choice any/* CUE disjunction: (string|struct) */ `json:"tool_choice,omitempty"`
-
-	// logprobs / top_logprobs: token log-probability reporting (unsupported by
-	// the local ollama OpenAI layer; authorable for a full OpenAI endpoint).
-	Logprobs *bool `json:"logprobs,omitempty"`
-
-	Top_logprobs *int64 `json:"top_logprobs,omitempty"`
-
-	// user: an end-user identifier for abuse monitoring.
-	User string `json:"user,omitempty"`
-
-	// metadata: arbitrary string metadata attached to the request.
-	Metadata map[string]string `json:"metadata,omitempty"`
-
-	// logit_bias: per-token-id bias map.
-	Logit_bias map[string]int64 `json:"logit_bias,omitempty"`
-
-	// extra: undocumented request fields, merged into the request body verbatim
-	// as dotted JSON paths (sjson). The ONE legal place for an unknown key.
-	Extra map[string]any/* CUE top */ `json:"extra,omitempty"`
-}
-
-// #LLMResponseFormat — the structured-output contract. type "json_schema" requires
-// the json_schema block; the schema field is the JSON Schema itself.
-type LLMResponseFormat struct {
-	Type string `json:"type"`
-
-	Json_schema struct {
-		Name string `json:"name"`
-
-		Description string `json:"description,omitempty"`
-
-		Schema map[string]any/* CUE top */ `json:"schema"`
-
-		Strict bool `json:"strict,omitempty"`
-	} `json:"json_schema,omitempty"`
-}
-
-// #LLMReasoning — the object form of the reasoning/thinking control.
-type LLMReasoning struct {
-	Effort string `json:"effort,omitempty"`
-}
-
-// #LLMStreamOptions — streaming response options.
-type LLMStreamOptions struct {
-	Include_usage *bool `json:"include_usage,omitempty"`
-}
-
-// #LLMNamedToolChoice — force one named function tool.
-type LLMNamedToolChoice struct {
-	Function struct {
-		Name string `json:"name"`
-	} `json:"function"`
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 }
 
 // ── Per-verb input shapes (the lifted-verb provider contract) ───────────────
@@ -305,95 +146,96 @@ type LLMNamedToolChoice struct {
 // collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
 // added here takes the same prefix.
 //
-// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
-// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+// Every referenced def is declared in THIS file (#OutputType, #RedoSpec,
+// #CacheSpec, #MediaSpec, #ReportSpec) except #LLMSpec, which is IMPORTED from the
+// contract module; none is re-declared here.
 type PipelineAgentInput struct {
-	Prompt string `json:"prompt"`
+	Prompt string `yaml:"prompt,omitempty" json:"prompt"`
 
-	Skill []string `json:"skill,omitempty"`
+	Skill []string `yaml:"skill,omitempty" json:"skill,omitempty"`
 
-	Tools []string `json:"tools,omitempty"`
+	Tools []string `yaml:"tools,omitempty" json:"tools,omitempty"`
 
-	Outputs map[string]OutputType `json:"outputs,omitempty"`
+	Outputs map[string]OutputType `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 
-	Max_turns int64 `json:"max_turns,omitempty"`
+	Max_turns int64 `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`
 
-	Llm LLMSpec `json:"llm,omitempty"`
+	Llm spec.LLMSpec `yaml:"llm,omitempty" json:"llm,omitempty"`
 
-	Redo RedoSpec `json:"redo,omitempty"`
+	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
 
-	Cache CacheSpec `json:"cache,omitempty"`
+	Cache CacheSpec `yaml:"cache,omitempty" json:"cache,omitempty"`
 
-	Repo string `json:"repo,omitempty"`
+	Repo string `yaml:"repo,omitempty" json:"repo,omitempty"`
 
 	Skills struct {
-		Corpus string `json:"corpus"`
-	} `json:"skills,omitempty"`
+		Corpus string `yaml:"corpus,omitempty" json:"corpus"`
+	} `yaml:"skills,omitempty" json:"skills,omitempty"`
 }
 
 type PipelineProbeInput struct {
-	Verbs []string `json:"verbs"`
+	Verbs []string `yaml:"verbs,omitempty" json:"verbs"`
 
-	Input map[string]any/* CUE top */ `json:"input,omitempty"`
+	Input map[string]any/* CUE top */ `yaml:"input,omitempty" json:"input,omitempty"`
 
-	Outputs []string `json:"outputs,omitempty"`
+	Outputs []string `yaml:"outputs,omitempty" json:"outputs,omitempty"`
 
-	Redo RedoSpec `json:"redo,omitempty"`
+	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
 
-	Media MediaSpec `json:"media,omitempty"`
+	Media MediaSpec `yaml:"media,omitempty" json:"media,omitempty"`
 }
 
 type PipelineAdeInput struct {
-	Bed string `json:"bed"`
+	Bed string `yaml:"bed,omitempty" json:"bed"`
 
-	Fail_on []string `json:"fail_on,omitempty"`
+	Fail_on []string `yaml:"fail_on,omitempty" json:"fail_on,omitempty"`
 
-	Redo RedoSpec `json:"redo,omitempty"`
+	Redo RedoSpec `yaml:"redo,omitempty" json:"redo,omitempty"`
 }
 
 type PipelineGenerateInput struct {
-	Template string `json:"template"`
+	Template string `yaml:"template,omitempty" json:"template"`
 
-	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
+	Vars map[string]any/* CUE top */ `yaml:"vars,omitempty" json:"vars,omitempty"`
 
-	Out string `json:"out"`
+	Out string `yaml:"out,omitempty" json:"out"`
 
-	Validate string `json:"validate,omitempty"`
+	Validate string `yaml:"validate,omitempty" json:"validate,omitempty"`
 
-	Negate_checks bool `json:"negate_checks,omitempty"`
+	Negate_checks bool `yaml:"negate_checks,omitempty" json:"negate_checks,omitempty"`
 
-	Report ReportSpec `json:"report,omitempty"`
+	Report ReportSpec `yaml:"report,omitempty" json:"report,omitempty"`
 }
 
 type PipelineEmitInput struct {
-	Schema string `json:"schema"`
+	Schema string `yaml:"schema,omitempty" json:"schema"`
 
-	Value map[string]any/* CUE top */ `json:"value"`
+	Value map[string]any/* CUE top */ `yaml:"value,omitempty" json:"value"`
 
-	Vars map[string]any/* CUE top */ `json:"vars,omitempty"`
+	Vars map[string]any/* CUE top */ `yaml:"vars,omitempty" json:"vars,omitempty"`
 
-	Out string `json:"out"`
+	Out string `yaml:"out,omitempty" json:"out"`
 
-	Format string `json:"format,omitempty"`
+	Format string `yaml:"format,omitempty" json:"format,omitempty"`
 
-	Validate string `json:"validate,omitempty"`
+	Validate string `yaml:"validate,omitempty" json:"validate,omitempty"`
 
-	Report ReportSpec `json:"report,omitempty"`
+	Report ReportSpec `yaml:"report,omitempty" json:"report,omitempty"`
 }
 
 // #PipelineMediaInput — dir/files are declared here because the Go reader consults them although the retired media stage did not declare them.
 type PipelineMediaInput struct {
-	Assemble bool `json:"assemble"`
+	Assemble bool `yaml:"assemble,omitempty" json:"assemble"`
 
-	Transcode string `json:"transcode,omitempty"`
+	Transcode string `yaml:"transcode,omitempty" json:"transcode,omitempty"`
 
-	Dir string `json:"dir,omitempty"`
+	Dir string `yaml:"dir,omitempty" json:"dir,omitempty"`
 
-	Files []string `json:"files,omitempty"`
+	Files []string `yaml:"files,omitempty" json:"files,omitempty"`
 
-	Media MediaSpec `json:"media,omitempty"`
+	Media MediaSpec `yaml:"media,omitempty" json:"media,omitempty"`
 }
 
 type PipelineGateInput struct {
-	Condition string `json:"condition"`
+	Condition string `yaml:"condition,omitempty" json:"condition"`
 }

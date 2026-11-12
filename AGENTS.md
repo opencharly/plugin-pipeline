@@ -26,8 +26,8 @@ Canonical files:
   `params/cue_types_gen.go` (generated — do not hand-edit), `cmd/serve/main.go`.
 - `charly.yml` — the root manifest (`discover: candy`) referencing the candy's own
   `pipeline-skill:` skill entity (declared in `candy/plugin-pipeline/charly.yml`).
-- `.github/workflows/ci.yml` — the repo's own `gofmt`/`vet`/`test` + generated-
-  params-reproducibility job.
+- `.github/workflows/ci.yml` — the repo's own `gofmt`/`vet`/`test` + the
+  generated-params-reproducibility test (in-process, via `spec/schemaparams`).
 - `.github/workflows/tag-on-merge.yml` — CalVer tag + `CHANGELOG/` on merge.
 - `README.md` — user overview only; never agent guidance.
 
@@ -58,15 +58,17 @@ Canonical files:
 
 - Edit the `plugin-pipeline:` candy entity, the Go source, and
   `schema/pipeline.cue` **together** — the schema is the single source for
-  `params/cue_types_gen.go`, and `ci.yml` fails if the committed generated params
-  do not reproduce.
+  `params/cue_types_gen.go` (regenerate with `charly candy params plugin-pipeline`),
+  and `TestGeneratedParamsAreCurrentAndReproducible` fails if the committed params
+  do not reproduce or are stale.
 - Keep this engine **domain-neutral**: the omarchy PR-eval lane and the org
   `plugin-review` validator are separate workflows. Do not add a `review` verb or
   auto-merge here.
 - Keep the authored `kind: pipeline` grammar in ONE place: the entity body IS
   `spec.Pipeline` (`steps:`) — this repo declares no grammar for it, and the load
-  gate is `sdk/workflowkit.ValidatePipeline`. `schema/pipeline.cue` declares only
-  the per-verb input shapes + the LLM/probe surface.
+  gate is `sdk/workflowkit.ValidatePipeline`. `schema/pipeline.cue` declares the
+  per-verb input shapes + the probe surface and IMPORTS the LLM vocabulary from
+  `github.com/opencharly/spec/schema` (one name, one home — never a local copy).
 - Keep the `pipeline-skill:` entity in step with any provider-surface change — it
   is the projected source for `/charly-pipeline:pipeline`.
 

@@ -44,7 +44,10 @@ lifted stage verbs.
   `verb:media` / `verb:gate`** — the seven stage bodies as ordinary verbs, each
   reachable as a `<word>: <input>` step from any plan.
 - **SDD** — `schema/pipeline.cue` is the single source for the per-verb input
-  shapes; run **`charly candy params plugin-pipeline`** (the candy's directory name)
+  shapes (the shared LLM vocabulary — `#LLMSpec` / `#LLMParams` and their four
+  companions — is IMPORTED from the contract module
+  `github.com/opencharly/spec/schema`, not restated here); run **`charly candy
+  params plugin-pipeline`** (the candy's directory name)
   to regenerate `params/cue_types_gen.go` (committed) from it. That one command is
   the whole pipeline — concatenate the schema under a `package params` + `@go(params)`
   header, generate the Go struct, normalize the struct tags — and it needs nothing

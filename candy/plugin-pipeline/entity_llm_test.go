@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/spec/spec"
 )
 
 func startLLM(t *testing.T, seen *map[string]string) *httptest.Server {
@@ -36,7 +36,7 @@ func TestEntityLLMPrecedence(t *testing.T) {
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL) // the endpoint must be the test server (reachability)
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
 	t.Setenv("EVAL_LLM_API_KEY", "env-key")
-	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model", Api_key: "entity-key"}}
+	rc := &verbEnv{llm: spec.LLMSpec{Model: "entity-model", Api_key: "entity-key"}}
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
@@ -57,7 +57,7 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 	srv := startLLM(t, &seen)
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	t.Setenv("EVAL_LLM_MODEL", "entity-model") // the entity-layer model via the env passthrough
-	rc := &verbEnv{llm: params.LLMSpec{}}      // no api_key anywhere
+	rc := &verbEnv{llm: spec.LLMSpec{}}        // no api_key anywhere
 	resp, err := runAgent(t.Context(), rc, "system", "run", []string{})
 	if err != nil || resp != "ok" {
 		t.Fatalf("agent: %v %v", resp, err)
@@ -71,10 +71,7 @@ func TestEntityLLMAbsentKey(t *testing.T) {
 // built-in default (the LOCAL ollama server model) applies. FAILS without the
 // deepseek-v4.1-flash:cloud default (the V4.0->V4.1 cutover).
 func TestLLMDefaultModel(t *testing.T) {
-	got, err := resolveLLM(nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := resolveLLM(nil, nil)
 	if got.Model != "deepseek-v4.1-flash:cloud" {
 		t.Errorf("default model: got %q, want \"deepseek-v4.1-flash:cloud\"", got.Model)
 	}

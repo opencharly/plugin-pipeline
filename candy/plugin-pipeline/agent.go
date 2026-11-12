@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
+	"github.com/opencharly/spec/spec"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,7 +40,7 @@ func runAgent(ctx context.Context, rc *verbEnv, systemPrompt, prompt string, too
 // runAgentTurns: the runtime with an EXPLICIT turn cap (0 = the env default) —
 // never a per-stage os.Setenv (process-global, raced the batch lanes). `stage`
 // carries the optional per-stage llm override (env > stage > entity > default).
-func runAgentTurns(ctx context.Context, rc *verbEnv, systemPrompt, prompt string, tools []string, stageMaxTurns int, stage *params.LLMSpec) (string, error) {
+func runAgentTurns(ctx context.Context, rc *verbEnv, systemPrompt, prompt string, tools []string, stageMaxTurns int, stage *spec.LLMSpec) (string, error) {
 	sys := systemPrompt // skills are resolved in runAgentStage against the entity's corpus
 	msgs := []chatMsg{{Role: "system", Content: &sys}, {Role: "user", Content: &prompt}}
 	toolSch := buildTools(tools)
