@@ -4,9 +4,10 @@ go 1.26.8
 
 require (
 	cuelang.org/go v0.16.1
+	github.com/emicklei/dot v1.11.0
 	github.com/openai/openai-go/v3 v3.61.0
 	github.com/opencharly/plugin-gh v0.2026252.1501
-	github.com/opencharly/sdk v0.2026315.2134
+	github.com/opencharly/sdk v0.2026316.1524
 	github.com/opencharly/spec v0.2026315.2118
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -18,7 +19,6 @@ require (
 	github.com/containerd/containerd/v2 v2.4.1 // indirect
 	github.com/containerd/errdefs v1.0.0 // indirect
 	github.com/containerd/log v0.2.0 // indirect
-	github.com/emicklei/dot v1.11.0 // indirect
 	github.com/emicklei/proto v1.14.3 // indirect
 	github.com/expr-lang/expr v1.17.8 // indirect
 	github.com/fatih/color v1.15.0 // indirect

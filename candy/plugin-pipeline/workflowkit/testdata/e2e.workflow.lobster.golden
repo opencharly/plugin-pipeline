@@ -1,0 +1,19 @@
+name: e2e
+description: end-to-end lowering fixture
+args:
+    who:
+        description: who to greet
+        default: world
+steps:
+    - id: fetch
+      run: printf '{"name":"ok","n":3}'
+    - id: probe
+      env:
+        REF_1: $fetch.json.name
+        REF_2: $fetch.json.n
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/e2e task _pipeline-e2e-probe --output -p REF_1="$REF_1" -p REF_2="$REF_2"
+    - id: confirm
+      approval: Proceed with ${who}?
+    - id: final
+      when: $confirm.approved
+      run: echo '{"done":true}'

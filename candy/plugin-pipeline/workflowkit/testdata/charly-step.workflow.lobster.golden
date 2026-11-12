@@ -1,0 +1,8 @@
+name: ci
+description: charly-arm fixture
+steps:
+    - id: build
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/ci 'box' 'build' 'my box'
+    - id: after
+      when: $build.exit_code == 0
+      run: "true"

@@ -7,10 +7,13 @@ module at `candy/plugin-pipeline/` (module path
 `charly.yml` declares `discover: candy` (so the repo is a project and its candy is
 scanned) and carries the embedded `pipeline-skill:` skill entity.
 
-`charly pipeline run <entity>` resolves the authored entity, validates it with
-`sdk/workflowkit.ValidatePipeline`, lowers it to the `(workflow.lobster,
-charly.yml)` pair with `sdk/workflowkit.Lower`, and dispatches the pair to the
-`workflow` PROVIDER CLASS as `workflow-run`. EXECUTION is the engine's — the
+`charly pipeline run <entity>` resolves the authored entity, validates it with the
+repo-local `workflowkit.ValidatePipeline`, lowers it to the `(workflow.lobster,
+charly.yml)` pair with `workflowkit.Lower`, and dispatches the pair to the
+`workflow` PROVIDER CLASS as `workflow-run`. The `kind: pipeline` ENTITY BODY is this
+repo's own (`schema/pipeline.cue`'s `#Pipeline` / `#PipelineValue`), declared on the
+`kind` capability as `InputDef: "#PipelineValue"` — a kind body lives with the plugin
+that serves it, and the contract module keeps only #PipelineClassRoutes. EXECUTION is the engine's — the
 `workflow` provider (plugin-lobster today), NOT this repo. The seven stage kinds
 survive as ordinary `verb:` providers (`verb:agent/probe/ade/generate/emit/media/
 gate`), each a declarative body reachable from any plan.
@@ -64,11 +67,19 @@ Canonical files:
 - Keep this engine **domain-neutral**: the omarchy PR-eval lane and the org
   `plugin-review` validator are separate workflows. Do not add a `review` verb or
   auto-merge here.
-- Keep the authored `kind: pipeline` grammar in ONE place: the entity body IS
-  `spec.Pipeline` (`steps:`) — this repo declares no grammar for it, and the load
-  gate is `sdk/workflowkit.ValidatePipeline`. `schema/pipeline.cue` declares the
-  per-verb input shapes + the probe surface and IMPORTS the LLM vocabulary from
-  `github.com/opencharly/spec/schema` (one name, one home — never a local copy).
+- The authored `kind: pipeline` grammar lives in ONE place and it is HERE: the
+  entity body (`steps:`) is `#Pipeline`/`#PipelineValue` in `schema/pipeline.cue`, and
+  the load gate is this repo's `workflowkit.ValidatePipeline`. The schema declares the
+  per-verb input shapes, the probe surface and the kind body, and IMPORTS everything
+  the contract module owns — the six LLM defs, and the shared grammar defs the moved
+  body references (`schema.#StrVal`, `schema.#Step`, `schema.#TaskParamSpec`,
+  `schema.#WorkflowArgVal`) — one name, one home, never a local copy.
+- `workflowkit/` is the kind-aware machinery for THIS kind: `validate.go`, `lower.go`,
+  `graph.go` plus their tests and `testdata/`. It uses the CONTRACT's kinds-blind
+  helpers rather than restating them — `sdk/workflowkit.RefNames`/`Validate`/`RefIDs`
+  (the expression grammar) and `sdk/workflowkit.PlanRefs`/`RewritePlanRefs` (the plan
+  ref steps). A second copy of the ref grammar would be a second implementation of a
+  rule the validator also uses (R2), so never fork one.
 - Keep the `pipeline-skill:` entity in step with any provider-surface change — it
   is the projected source for `/charly-pipeline:pipeline`.
 
