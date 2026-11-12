@@ -9,7 +9,6 @@ import (
 	"strconv"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk/llmkit"
 	"github.com/opencharly/spec/spec"
 )
@@ -41,59 +40,31 @@ type chatMsg = llmkit.Message
 
 // resolveLLM applies the engine's documented precedence FIELD-WISE: a lower layer
 // fills only what the higher layers left unset (env > stage > entity > built-in
-// default). stage may be nil (the standalone CLI path). The entity's `llm:` block
-// comes from the authored #LLMSpec; the stage's `llm:` is applied over it; the
-// EVAL_LLM_* env then wins (the operator layer).
+// default). stage may be nil (the standalone CLI path).
+//
+// The entity's `llm:` block and the stage's override are the CONTRACT's
+// spec.LLMSpec: the schema IMPORTS that definition rather than restating it, so
+// the value the loader validated and the value the shared client consumes are ONE
+// type. The former params -> spec JSON bridge existed only to translate between two
+// declarations of the same vocabulary and is gone with the copy — no conversion can
+// now silently drop an authored block.
 //
 // An empty RESOLVED api_key means ABSENT: no Authorization header is sent, so a
 // missing secret can never zero out a lane — and the local ollama needs none.
-func resolveLLM(rc *verbEnv, stage *params.LLMSpec) (llmkit.Config, error) {
+func resolveLLM(rc *verbEnv, stage *spec.LLMSpec) llmkit.Config {
 	cfg := llmkit.Default()
 	if rc != nil {
-		// layer 3 — the entity's authored llm: block
-		e, err := toSpecLLM(rc.llm)
-		if err != nil {
-			return llmkit.Config{}, fmt.Errorf("llm: entity block: %w", err)
-		}
-		cfg = cfg.Apply(e)
+		cfg = cfg.Apply(rc.llm) // layer 3 — the entity's authored llm: block
 	}
-	if stage != nil { // layer 2 — the stage-local override
-		s, err := toSpecLLM(*stage)
-		if err != nil {
-			return llmkit.Config{}, fmt.Errorf("llm: stage override: %w", err)
-		}
-		cfg = cfg.Apply(s)
+	if stage != nil {
+		cfg = cfg.Apply(*stage) // layer 2 — the stage-local override
 	}
-	return cfg.FromEnv(), nil // layer 1 — the operator env
-}
-
-// toSpecLLM bridges a generated plugin llm value (the entity's params.LLMSpec or
-// a stage's params.LLMSpec) onto the contract spec.LLMSpec the shared client
-// consumes. The two shapes are the same CUE vocabulary, so the JSON round-trip is
-// exact; ONE helper serves both callers (R3 — the value/pointer difference is the
-// caller's, not a reason for a second copy).
-//
-// The error is PROPAGATED, never swallowed: a failed conversion would silently
-// drop the entire authored llm: block and let the lane fall back to defaults —
-// exactly the silent-config-failure class R1 forbids.
-func toSpecLLM(v any) (spec.LLMSpec, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return spec.LLMSpec{}, fmt.Errorf("marshal: %w", err)
-	}
-	var out spec.LLMSpec
-	if err := json.Unmarshal(b, &out); err != nil {
-		return spec.LLMSpec{}, fmt.Errorf("unmarshal: %w", err)
-	}
-	return out, nil
+	return cfg.FromEnv() // layer 1 — the operator env
 }
 
 // chat issues ONE streaming completion through the shared client.
-func chat(ctx context.Context, rc *verbEnv, stage *params.LLMSpec, msgs []chatMsg, tools []openai.ChatCompletionToolUnionParam) (chatMsg, error) {
-	cfg, err := resolveLLM(rc, stage)
-	if err != nil {
-		return chatMsg{}, err
-	}
+func chat(ctx context.Context, rc *verbEnv, stage *spec.LLMSpec, msgs []chatMsg, tools []openai.ChatCompletionToolUnionParam) (chatMsg, error) {
+	cfg := resolveLLM(rc, stage)
 	out, err := llmkit.Chat(ctx, cfg, llmkit.ToSDKMessages(msgs), tools)
 	if err != nil {
 		return chatMsg{}, err
@@ -104,11 +75,8 @@ func chat(ctx context.Context, rc *verbEnv, stage *params.LLMSpec, msgs []chatMs
 }
 
 // chatVision sends one multimodal completion through the shared client.
-func chatVision(ctx context.Context, rc *verbEnv, stage *params.LLMSpec, prompt string, images []string) (string, error) {
-	cfg, err := resolveLLM(rc, stage)
-	if err != nil {
-		return "", err
-	}
+func chatVision(ctx context.Context, rc *verbEnv, stage *spec.LLMSpec, prompt string, images []string) (string, error) {
+	cfg := resolveLLM(rc, stage)
 	return llmkit.ChatVision(ctx, cfg, prompt, images)
 }
 
@@ -166,7 +134,7 @@ func intValue(v any) int {
 // stageLLM decodes the stage's authored `llm` override from the raw stage map
 // (the CUE-validated form) into its generated type. An absent block is nil —
 // resolveLLM then simply has no stage layer.
-func stageLLM(raw map[string]any) *params.LLMSpec {
+func stageLLM(raw map[string]any) *spec.LLMSpec {
 	if raw == nil {
 		return nil
 	}
@@ -178,7 +146,7 @@ func stageLLM(raw map[string]any) *params.LLMSpec {
 	if err != nil {
 		return nil
 	}
-	var out params.LLMSpec
+	var out spec.LLMSpec
 	if err := json.Unmarshal(b, &out); err != nil {
 		return nil
 	}

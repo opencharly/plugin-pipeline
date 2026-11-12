@@ -1,13 +1,35 @@
 // pipeline.cue — the generic agent/workflow engine's own schema (SDD single source).
-// Self-contained: no package clause, no base references — compiles standalone and
-// splices onto the host base. cue:gen (wrapped with package params + @go(params))
-// emits params/cue_types_gen.go; the provider serves this over Describe so every
-// authored kind:pipeline entity body and probe input is validated at load.
+// It declares the plugin's OWN authoring shapes (the per-verb input defs and the
+// shared pipeline helpers) and IMPORTS the contract module for the shapes it does
+// not own. It carries no package clause — spec/schemacompose composes it as ONE
+// CUE module instance with the package re-established — and `charly candy params`
+// emits params/cue_types_gen.go from that same instance. The provider serves this
+// over Describe so every authored kind:pipeline entity body and verb input is
+// validated at load.
 //
 // The kind:pipeline ENTITY body itself is spec.Pipeline (`steps:`), declared in
 // spec/schema/pipeline.cue and validated by sdk/workflowkit.ValidatePipeline. This
-// file no longer declares it: the front-end lowers the authored entity with
+// file does not declare it: the front-end lowers the authored entity with
 // sdk/workflowkit.Lower and dispatches it to the `workflow` provider class.
+//
+// ONE NAME, ONE HOME. The six LLM definitions this file used to restate —
+// #LLMSpec, #LLMParams, #LLMResponseFormat, #LLMReasoning, #LLMStreamOptions and
+// #LLMNamedToolChoice — are the CONTRACT module's
+// (`github.com/opencharly/spec/schema`). They are the vocabulary BOTH this engine's
+// agent stages and the `vision:` check verb author against, and they generate the
+// Go types (`spec.LLMSpec` / `spec.LLMParams`) the shared SDK `llmkit` client
+// consumes. This schema IMPORTS them; the structurally identical local copies are
+// DELETED, and the parity test that existed only to keep the copies honest retires
+// with them (R2 — one name, one home).
+//
+// THE IMPORT RESOLVES OFFLINE. It is the shape spec/schemacompose exists for: the
+// contract module is served from the spec Go module the binary already links — no
+// network, no module cache, no `cue.mod`, no published CUE module — on the serve
+// side (BuildCapabilities → ServedSchema) AND on the host side, which composes the
+// SAME body under the DERIVED module declaration (the wire carries no module
+// declaration, so both sides evaluate under one they can derive).
+
+import "github.com/opencharly/spec/schema"
 
 // #OutputType: the typed-output contract an agent stage declares per output field.
 #OutputType: {
@@ -45,134 +67,25 @@
 // The P1 agent runtime input (the standalone + stage op).
 #AgentRunInput: { system_prompt: string, prompt: string, skill?: [...string], tools?: [...string] }
 
-// ── The LLM surface (the OpenAI-compatible API) ─────────────────────────────
+// ── The LLM surface — the CONTRACT's definitions, imported ──────────────────
 //
-// #LLMSpec is the endpoint + connection config; #LLMParams is the GENERAL
-// request-parameter block applied to every completion the engine issues. Both
-// are CLOSED: an unknown or wrongly-typed field is a LOAD error, never a
-// silent drop (the `extra` escape hatch exists for genuinely undocumented
-// keys, and is the only place an arbitrary key is legal).
-//
-// Resolution precedence, applied FIELD-WISE (a lower layer fills only what the
-// higher layers left unset):
-//
-//	env override > stage llm block > entity llm block > built-in default
-//
-// The built-in default is the LOCAL ollama server (http://localhost:11434/v1,
-// deepseek-v4.1-flash:cloud) so a lane needs no authored block to run. An
-// empty RESOLVED api_key means ABSENT: the client sends NO Authorization
-// header at all (the local ollama needs none) — a missing secret can never
-// zero out another layer.
+// The six definitions this file used to restate are declared once, in
+// `github.com/opencharly/spec/schema`: #LLMSpec (the endpoint + connection config)
+// and #LLMParams (the general request-parameter block), plus the four companions
+// #LLMResponseFormat / #LLMReasoning / #LLMStreamOptions / #LLMNamedToolChoice.
+// Both are CLOSED there: an unknown or wrongly-typed field is a LOAD error, never
+// a silent drop (the `extra` escape hatch inside #LLMParams exists for genuinely
+// undocumented keys, and is the only place an arbitrary key is legal).
 //
 // api_key is REF-RESOLVED like every other authored string, so the correct
 // authoring is a reference — `api_key: $env.OPENAI_API_KEY` (or a secret ref) —
 // never a literal key committed to the repo.
 //
-// Every scalar the engine would otherwise hardcode is authorable here: the
-// sampling knobs, the token bound, the reasoning control, the structured-output
-// contract, the retry/idle policy, and the request metadata.
-#LLMSpec: close({
-	// base_url: the OpenAI-compatible endpoint root INCLUDING the /v1 suffix
-	// (e.g. http://localhost:11434/v1). The engine appends /chat/completions.
-	base_url?: string
-	// model: the model identifier sent in the request (e.g. deepseek-v4.1-flash:cloud).
-	model?: string
-	// api_key: bearer credential; empty/absent => NO auth header is sent.
-	api_key?: string
-	// organization / project: sent as the OpenAI-Organization / OpenAI-Project
-	// headers for a multi-org key.
-	organization?: string
-	project?:      string
-	// timeout: a Go duration bounding the WHOLE request (e.g. "10m"). Empty
-	// means no whole-request deadline — the idle_timeout is the bound instead.
-	timeout?: string
-	// idle_timeout: a Go duration bounding the gap BETWEEN streaming chunks.
-	// This is the primary liveness bound: a slow-but-progressing generation is
-	// never cut off, while a silent provider fails in bounded time.
-	idle_timeout?: string
-	// max_retries: automatic retries on a retryable HTTP status. Defaults to 2.
-	max_retries?: int & >=0 @go(Max_retries,optional=nillable)
-	// headers: extra request headers (e.g. an OpenRouter HTTP-Referer/X-Title).
-	headers?: {[string]: string}
-	// params: the general request parameters (see #LLMParams).
-	params?: #LLMParams
-})
-
-// #LLMParams is the general OpenAI chat-completions request parameter block.
-// Field names match the wire API exactly. All fields are OPTIONAL: an omitted
-// field is not sent at all (the server's own default applies), so the engine
-// never injects a value the author did not ask for.
-#LLMParams: close({
-	// temperature: sampling temperature (0..2).
-	temperature?: number & >=0 & <=2 @go(Temperature,type=*float64)
-	// top_p: nucleus sampling probability mass (0..1).
-	top_p?: number & >=0 & <=1 @go(Top_p,type=*float64)
-	// max_tokens: the completion token bound (ollama: num_predict).
-	max_tokens?: int & >0 @go(Max_tokens,optional=nillable)
-	// max_completion_tokens: the newer alias of max_tokens.
-	max_completion_tokens?: int & >0 @go(Max_completion_tokens,optional=nillable)
-	// frequency_penalty / presence_penalty: repetition controls (-2..2).
-	frequency_penalty?: number & >=-2 & <=2 @go(Frequency_penalty,type=*float64)
-	presence_penalty?:  number & >=-2 & <=2 @go(Presence_penalty,type=*float64)
-	// seed: requests a reproducible generation where the server supports it.
-	seed?: int @go(Seed,optional=nillable)
-	// stop: one stop sequence, or a list of them.
-	stop?: string | [...string]
-	// response_format: the structured-output contract (text | json_object |
-	// json_schema).
-	response_format?: #LLMResponseFormat
-	// reasoning_effort: thinking control for reasoning models ("none" disables
-	// thinking where the server honours it).
-	reasoning_effort?: "high" | "medium" | "low" | "none" @go(Reasoning_effort,type=string)
-	// reasoning: the object form of the same control (ollama accepts either).
-	reasoning?: #LLMReasoning
-	// stream_options: streaming response options.
-	stream_options?: #LLMStreamOptions
-	// parallel_tool_calls: permit the model to emit several tool calls per turn.
-	parallel_tool_calls?: bool @go(Parallel_tool_calls,optional=nillable)
-	// tool_choice: "none" | "auto" | "required" | {function: {name}}.
-	tool_choice?: "none" | "auto" | "required" | #LLMNamedToolChoice
-	// logprobs / top_logprobs: token log-probability reporting (unsupported by
-	// the local ollama OpenAI layer; authorable for a full OpenAI endpoint).
-	logprobs?:     bool @go(Logprobs,optional=nillable)
-	top_logprobs?: int  @go(Top_logprobs,optional=nillable)
-	// user: an end-user identifier for abuse monitoring.
-	user?: string
-	// metadata: arbitrary string metadata attached to the request.
-	metadata?: {[string]: string}
-	// logit_bias: per-token-id bias map.
-	logit_bias?: {[string]: int}
-	// extra: undocumented request fields, merged into the request body verbatim
-	// as dotted JSON paths (sjson). The ONE legal place for an unknown key.
-	extra?: {[string]: _}
-})
-
-// #LLMResponseFormat — the structured-output contract. type "json_schema" requires
-// the json_schema block; the schema field is the JSON Schema itself.
-#LLMResponseFormat: close({
-	type: "text" | "json_object" | "json_schema" @go(Type,type=string)
-	json_schema?: close({
-		name:         string
-		description?: string
-		schema:       {[string]: _}
-		strict?:      bool
-	})
-})
-
-// #LLMReasoning — the object form of the reasoning/thinking control.
-#LLMReasoning: close({
-	effort?: "high" | "medium" | "low" | "none" @go(Effort,type=string)
-})
-
-// #LLMStreamOptions — streaming response options.
-#LLMStreamOptions: close({
-	include_usage?: bool @go(Include_usage,optional=nillable)
-})
-
-// #LLMNamedToolChoice — force one named function tool.
-#LLMNamedToolChoice: close({
-	function: close({name: string})
-})
+// The engine's resolution precedence (env override > stage llm block > entity llm
+// block > built-in default), the built-in local-ollama default, and the
+// field-by-field merge are IMPLEMENTED in this plugin's `resolveLLM` and the
+// shared SDK client (`sdk/llmkit`), which own that behaviour; the shapes they read
+// are the imported definitions above.
 
 // ── Per-verb input shapes (the lifted-verb provider contract) ───────────────
 //
@@ -199,15 +112,16 @@
 // collision loudly) is tracked as opencharly/charly#770; until it lands, a NEW def
 // added here takes the same prefix.
 //
-// Every referenced def (#OutputType, #LLMSpec, #RedoSpec, #CacheSpec,
-// #MediaSpec, #ReportSpec) is declared in THIS file; none is re-declared here.
+// Every referenced def is declared in THIS file (#OutputType, #RedoSpec,
+// #CacheSpec, #MediaSpec, #ReportSpec) except #LLMSpec, which is IMPORTED from the
+// contract module; none is re-declared here.
 #PipelineAgentInput: {
 	prompt:     string                  @go(Prompt)
 	skill?:     [...string]             @go(Skill)
 	tools?:     [...string]             @go(Tools)
 	outputs?:   {[string]: #OutputType} @go(Outputs)
 	max_turns?: int & >0                @go(Max_turns)
-	llm?:       #LLMSpec                @go(Llm)
+	llm?:       schema.#LLMSpec         @go(Llm)
 	redo?:      #RedoSpec               @go(Redo)
 	cache?:     #CacheSpec              @go(Cache)
 	repo?:      string                  @go(Repo)

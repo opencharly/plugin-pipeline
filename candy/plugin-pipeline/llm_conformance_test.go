@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk/llmkit"
+	"github.com/opencharly/spec/spec"
 )
 
 // llm_conformance_test.go — the proof that the authored #LLMSpec/#LLMParams
@@ -41,7 +41,7 @@ func captureLLM(t *testing.T, reply func(rw http.ResponseWriter), assert func(t 
 
 // runChat drives one chat() call against the mock with the given rc/stage and
 // asserts the reply is a text turn.
-func runChat(t *testing.T, rc *verbEnv, stage *params.LLMSpec, srv *httptest.Server, want string) chatMsg {
+func runChat(t *testing.T, rc *verbEnv, stage *spec.LLMSpec, srv *httptest.Server, want string) chatMsg {
 	t.Helper()
 	t.Setenv("EVAL_LLM_BASE_URL", srv.URL)
 	msg, err := chat(t.Context(), rc, stage, []chatMsg{{Role: "user", Content: strptr("hi")}}, nil)
@@ -208,7 +208,7 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 	freq, pres := 0.1, 0.2
 	parallel, logprobs := true, false
 
-	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
+	rc := &verbEnv{llm: spec.LLMSpec{Params: spec.LLMParams{
 		Temperature:           &temp,
 		Top_p:                 &topP,
 		Max_tokens:            &maxTok,
@@ -218,14 +218,14 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 		Seed:                  &seed,
 		Stop:                  []any{"A", "B"},
 		Reasoning_effort:      "high",
-		Stream_options:        params.LLMStreamOptions{Include_usage: openaiBoolPtr(true)},
+		Stream_options:        spec.LLMStreamOptions{Include_usage: openaiBoolPtr(true)},
 		Parallel_tool_calls:   &parallel,
 		Logprobs:              &logprobs,
 		Top_logprobs:          &topLog,
 		User:                  "u-1",
 		Metadata:              map[string]string{"k": "v"},
 		Logit_bias:            map[string]int64{"5": 1},
-		Response_format:       params.LLMResponseFormat{Type: "json_object"},
+		Response_format:       spec.LLMResponseFormat{Type: "json_object"},
 		Tool_choice:           "required",
 		Extra:                 map[string]any{"custom_knob": 7},
 	}}}
@@ -277,9 +277,9 @@ func TestConformance_AllParamsReachTheWire(t *testing.T) {
 // TestConformance_JsonSchemaResponseFormat: a json_schema response_format is
 // rendered as the OpenAI json_schema object (not just json_object).
 func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
-	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
-		Response_format: func() params.LLMResponseFormat {
-			rf := params.LLMResponseFormat{Type: "json_schema"}
+	rc := &verbEnv{llm: spec.LLMSpec{Params: spec.LLMParams{
+		Response_format: func() spec.LLMResponseFormat {
+			rf := spec.LLMResponseFormat{Type: "json_schema"}
 			rf.Json_schema.Name = "verdict"
 			rf.Json_schema.Description = "d"
 			rf.Json_schema.Schema = map[string]any{"type": "object"}
@@ -311,17 +311,14 @@ func TestConformance_JsonSchemaResponseFormat(t *testing.T) {
 func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 	temp, topP := 0.9, 0.5
 	stageTemp := 0.1
-	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model", Params: params.LLMParams{
+	rc := &verbEnv{llm: spec.LLMSpec{Model: "entity-model", Params: spec.LLMParams{
 		Temperature: &temp, Top_p: &topP,
 	}}}
-	stage := &params.LLMSpec{
+	stage := &spec.LLMSpec{
 		Model:  "stage-model",
-		Params: params.LLMParams{Temperature: &stageTemp},
+		Params: spec.LLMParams{Temperature: &stageTemp},
 	}
-	got, err := resolveLLM(rc, stage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := resolveLLM(rc, stage)
 	if got.Model != "stage-model" {
 		t.Errorf("model: stage must win, got %q", got.Model)
 	}
@@ -337,12 +334,9 @@ func TestConformance_StageOverridesEntityFieldWise(t *testing.T) {
 // authored layers (the documented operator override).
 func TestConformance_EnvBeatsStageAndEntity(t *testing.T) {
 	t.Setenv("EVAL_LLM_MODEL", "env-model")
-	rc := &verbEnv{llm: params.LLMSpec{Model: "entity-model"}}
-	stage := &params.LLMSpec{Model: "stage-model"}
-	resolved, err := resolveLLM(rc, stage)
-	if err != nil {
-		t.Fatal(err)
-	}
+	rc := &verbEnv{llm: spec.LLMSpec{Model: "entity-model"}}
+	stage := &spec.LLMSpec{Model: "stage-model"}
+	resolved := resolveLLM(rc, stage)
 	if got := resolved.Model; got != "env-model" {
 		t.Fatalf("model: env must win, got %q", got)
 	}
@@ -388,7 +382,7 @@ func TestConformance_HeadersReachTheWire(t *testing.T) {
 		writeSSEContent(rw, "ok")
 	}))
 	defer srv.Close()
-	rc := &verbEnv{llm: params.LLMSpec{Headers: map[string]string{"HTTP-Referer": "https://example.test"}}}
+	rc := &verbEnv{llm: spec.LLMSpec{Headers: map[string]string{"HTTP-Referer": "https://example.test"}}}
 	runChat(t, rc, nil, srv, "ok")
 	if gotReferer != "https://example.test" {
 		t.Errorf("custom header not applied, got %q", gotReferer)
@@ -399,15 +393,12 @@ func TestConformance_HeadersReachTheWire(t *testing.T) {
 // #LLMSpec resolve as authored.
 func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 	retries := int64(0)
-	rc := &verbEnv{llm: params.LLMSpec{
+	rc := &verbEnv{llm: spec.LLMSpec{
 		Timeout:      "90s",
 		Idle_timeout: "45s",
 		Max_retries:  &retries,
 	}}
-	got, err := resolveLLM(rc, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := resolveLLM(rc, nil)
 	if got.Timeout.String() != "1m30s" {
 		t.Errorf("timeout: got %s, want 1m30s", got.Timeout)
 	}
@@ -422,7 +413,7 @@ func TestConformance_TimeoutAndRetriesAreConfigurable(t *testing.T) {
 // TestConformance_ExtraEscapeHatchIsOrdered: the `extra` map reaches the wire as
 // documented request fields (the ONLY legal unknown-key path).
 func TestConformance_ExtraEscapeHatchIsOrdered(t *testing.T) {
-	rc := &verbEnv{llm: params.LLMSpec{Params: params.LLMParams{
+	rc := &verbEnv{llm: spec.LLMSpec{Params: spec.LLMParams{
 		Extra: map[string]any{"z_knob": 1, "a_knob": "x"},
 	}}}
 	srv := captureLLM(t, func(rw http.ResponseWriter) { writeSSEContent(rw, "ok") },
@@ -437,25 +428,6 @@ func TestConformance_ExtraEscapeHatchIsOrdered(t *testing.T) {
 // openaiBoolPtr is the test-local bool pointer helper (the generated param
 // fields are *bool).
 func openaiBoolPtr(b bool) *bool { return &b }
-
-// TestToSpecLLM_PropagatesErrors: the bridge must NEVER silently degrade to a zero
-// config — a failed conversion would drop the entire authored llm: block and let
-// the lane fall back to defaults (the silent-config-failure class R1 forbids).
-// A value json.Marshal cannot encode (a channel) is the honest failure path.
-func TestToSpecLLM_PropagatesErrors(t *testing.T) {
-	if _, err := toSpecLLM(make(chan int)); err == nil {
-		t.Fatal("an unencodable value must return an error, never a zero spec.LLMSpec")
-	}
-	// the happy path still works for both caller shapes
-	e, err := toSpecLLM(params.LLMSpec{Model: "m"})
-	if err != nil || e.Model != "m" {
-		t.Fatalf("entity bridge: %v model=%q", err, e.Model)
-	}
-	st, err := toSpecLLM(params.LLMSpec{Model: "s"})
-	if err != nil || st.Model != "s" {
-		t.Fatalf("stage bridge: %v model=%q", err, st.Model)
-	}
-}
 
 // TestChatVision_AdapterDrivesTheSharedClient: the engine's SHIPPED chatVision
 // adapter must be the thing under test. The first revision of the rewire deleted

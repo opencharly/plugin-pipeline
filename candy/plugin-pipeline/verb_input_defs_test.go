@@ -3,6 +3,7 @@ package pluginpipeline
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -101,4 +102,51 @@ func TestVerbInputDefsArePrefixed(t *testing.T) {
 			t.Errorf("the schema declares the un-prefixed %s. It shares ONE CUE instance (and so ONE def namespace) with every other loaded plugin, and CUE would unify it with a same-named def from another plugin SILENTLY. Keep the #Pipeline prefix — see the header of verb_input_defs_test.go.", bare)
 		}
 	}
+}
+
+// topLevelFields returns the sorted top-level field names of a CUE def. The scan is
+// BOUNDED (it stops when the def's own brace closes) so it cannot collect the next
+// def's fields. It reads the SOURCE TEXT, which is the point: it freezes the key
+// spellings a migrator copies verbatim, not the value a compose would produce.
+func topLevelFields(t *testing.T, src, def string) []string {
+	t.Helper()
+	idx := strings.Index(src, def+":")
+	if idx < 0 {
+		t.Fatalf("def %s not found in source", def)
+	}
+	body := src[idx:]
+	start := strings.Index(body, "{")
+	if start < 0 {
+		t.Fatalf("def %s has no body", def)
+	}
+	depth := 0
+	fieldRe := regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_]*)\??\s*:`)
+	set := map[string]bool{}
+	opened := false
+	for _, line := range strings.Split(body[start:], "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "//") && trimmed != "" {
+			if depth == 1 {
+				if m := fieldRe.FindStringSubmatch(trimmed); m != nil {
+					set[m[1]] = true
+				}
+			}
+		}
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		if depth > 0 {
+			opened = true
+		}
+		if opened && depth == 0 {
+			break
+		}
+	}
+	if len(set) == 0 {
+		t.Fatalf("no fields parsed for %s (parser drift?)", def)
+	}
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
