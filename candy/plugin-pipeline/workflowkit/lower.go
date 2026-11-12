@@ -142,9 +142,11 @@ type generatedTask struct {
 // while the lobster file — and every lobster consumer, upstream's loader included — spells
 // it `responseSchema` (plugin-lobster's #LobsterInput). The engine's loader REQUIRES the
 // key: a step whose `input` object lacks `responseSchema` is rejected at load. Emitted with
-// the authoring spelling, an input gate would never reach the engine at all. Every other
-// step key already agrees between the two spellings, so this is the whole of the
-// translation.
+// the authoring spelling, an input gate would never reach the engine at all.
+//
+// This comment used to end "Every other step key already agrees between the two spellings, so this is
+// the whole of the translation." That was an assumption stated as a fact, and it was false twice over
+// (opencharly/plugin-pipeline#38) - see mapLobsterVocabulary.
 func mapLobsterInputKey(st *yaml.Node) {
 	in := kit.MappingChild(st, "input")
 	if in == nil || in.Kind != yaml.MappingNode {
@@ -158,6 +160,47 @@ func mapLobsterInputKey(st *yaml.Node) {
 	}
 }
 
+// mapLobsterVocabulary rewrites the step keys whose AUTHORED spelling differs from the engine's, and
+// materialises the defaults the authored schema declares but the engine's enum does not.
+//
+// Two words, one contract (opencharly/plugin-pipeline#38). The authored schema offers
+// `on_error: "fail" | "continue" | "skip_rest"`; the engine's enum accepts `"stop" | "continue" |
+// "skip_rest"`. Nothing at this boundary translated the first, so `on_error: fail` - a word the schema
+// explicitly offers - reached an engine that does not know it and silently behaved as `continue`. And
+// `#PipelineParallel` declares `wait?: *"all" | "any"`, a DEFAULT, while the engine's enum declares none:
+// an unauthored `wait:` arrived as an empty string against an enum with no default.
+//
+// Both are one defect: the boundary carried no vocabulary discipline, and one instance was visible while
+// the other was not.
+func mapLobsterVocabulary(st *yaml.Node) {
+	mapLobsterInputKey(st)
+	renameStepScalar(st, "on_error", "fail", "stop")
+	if par := kit.MappingChild(st, "parallel"); par != nil {
+		defaultStepScalar(par, "wait", "all")
+	}
+}
+
+// renameStepScalar rewrites key's value from `from` to `to` when it holds exactly that word, and reports
+// whether it did. Any other value is left ALONE rather than guessed at: the engine's own loader is the
+// authority on whether a word is one it knows.
+func renameStepScalar(st *yaml.Node, key, from, to string) bool {
+	v := kit.MappingChild(st, key)
+	if v == nil || v.Kind != yaml.ScalarNode || v.Value != from {
+		return false
+	}
+	v.Value = to
+	return true
+}
+
+// defaultStepScalar materialises key: value when the key is ABSENT. An authored value - including one
+// this function does not recognise - is never overwritten.
+func defaultStepScalar(st *yaml.Node, key, value string) {
+	if st == nil || st.Kind != yaml.MappingNode || kit.MappingChild(st, key) != nil {
+		return
+	}
+	st.Content = append(st.Content, scalarNode(key), scalarNode(value))
+}
+
 // lowerStep lowers ONE step (or sub-step / parallel branch) in place and returns it. A
 // `plan:` step becomes a `run:` that calls the generated charly task with `--output` and
 // the step's lobstered references passed as `-p REF_n="$REF_n"`; a `charly:` step becomes a
@@ -167,7 +210,7 @@ func (c *lowerCtx) lowerStep(st *yaml.Node, path string) (*yaml.Node, error) {
 	if st == nil || st.Kind != yaml.MappingNode {
 		return st, nil
 	}
-	mapLobsterInputKey(st)
+	mapLobsterVocabulary(st)
 
 	// recurse into the nested step lists FIRST, so a branch's own plan:/charly: lowers too.
 	if par := kit.MappingChild(st, "parallel"); par != nil {
