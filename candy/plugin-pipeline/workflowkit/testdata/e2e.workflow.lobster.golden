@@ -6,14 +6,23 @@ args:
         default: world
 steps:
     - id: fetch
-      run: printf '{"name":"ok","n":3}'
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/e2e task _pipeline-e2e-fetch --output
     - id: probe
+      on_error: stop
       env:
         REF_1: $fetch.json.name
         REF_2: $fetch.json.n
       run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/e2e task _pipeline-e2e-probe --output -p REF_1="$REF_1" -p REF_2="$REF_2"
+    - id: bed
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/e2e task _pipeline-e2e-bed --output
+    - id: verify
+      on_error: stop
+      pipeline: verify
     - id: confirm
+      on_error: stop
       approval: Proceed with ${who}?
     - id: final
-      when: $confirm.approved
-      run: echo '{"done":true}'
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/e2e task _pipeline-e2e-final --output

@@ -126,7 +126,7 @@ func TestAgentRuntimeSystemPromptAndTools(t *testing.T) {
 
 func TestCLIValidate(t *testing.T) {
 	dir := t.TempDir()
-	cfg := "test-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
+	cfg := "test-plan:\n  pipeline:\n    description: a test pipeline\n    stage:\n      s:\n        step:\n          step:\n            - run: s\n              command: {command: \"true\"}\n"
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(cfg), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestCLIValidate_FlatImportSibling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
+	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    stage:\n      s:\n        step:\n          step:\n            - run: s\n              command: {command: \"true\"}\n"
 	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestCLIValidate_DiscoveredManifest(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "discovered-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
+	pipe := "discovered-plan:\n  pipeline:\n    description: a test pipeline\n    stage:\n      s:\n        step:\n          step:\n            - run: s\n              command: {command: \"true\"}\n"
 	if err := os.WriteFile(filepath.Join(sub, "charly.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestCLIValidate_RootWinsSameKind(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "charly.yml"), []byte(root), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    steps:\n      - id: s\n        run: \"true\"\n"
+	pipe := "split-plan:\n  pipeline:\n    description: a test pipeline\n    stage:\n      s:\n        step:\n          step:\n            - run: s\n              command: {command: \"true\"}\n"
 	if err := os.WriteFile(filepath.Join(dir, "pipelines.yml"), []byte(pipe), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestLoadEntity_MalformedRootSurfacesCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CHARLY_PROJECT_DIR", dir)
-	_, err := loadEntity("anything")
+	_, err := loadEntity("anything", nil)
 	if err == nil {
 		t.Fatal("a malformed root must error")
 	}
@@ -232,7 +232,7 @@ func TestLoadEntity_MissingImportPathSurfacesCause(t *testing.T) {
 	}
 	// the entity lives nowhere; the DECLARED import is missing -> that is the real cause.
 	t.Setenv("CHARLY_PROJECT_DIR", dir)
-	_, err := loadEntity("my-plan")
+	_, err := loadEntity("my-plan", nil)
 	if err == nil {
 		t.Fatal("a declared-but-missing import must error")
 	}
@@ -250,7 +250,7 @@ func TestLoadEntity_WrongKindIsNamed(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("CHARLY_PROJECT_DIR", dir)
-	_, err := loadEntity("my-plan")
+	_, err := loadEntity("my-plan", nil)
 	if err == nil {
 		t.Fatal("a name under the wrong kind must error")
 	}

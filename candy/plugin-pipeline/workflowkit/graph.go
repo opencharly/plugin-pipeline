@@ -7,94 +7,54 @@ import (
 
 	"github.com/emicklei/dot"
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
-	sdkworkflowkit "github.com/opencharly/sdk/workflowkit"
 )
 
 // graph.go — the workflow graph renderers. One edge model, three renderings
 // (mermaid / graphviz dot / ascii), so `charly workflow graph --format …` is the
 // same graph however it is drawn.
+//
+// THE ONE EDGE MODEL IS `after:`. A stage's scheduling constraint is the edge its
+// document wrote (D-FLOW-1: "ordered by `after:`"), so the graph this file draws IS
+// the ordering the lowering applies — the same relation, read from the same field, not
+// a second opinion about what depends on what.
 
 // GraphFormat is the closed renderer vocabulary.
 var GraphFormat = []string{"mermaid", "dot", "ascii"}
 
-// GraphEdge is one dataflow edge: `To` consumes the result of `From` via `Relation`
-// (when / stdin / for_each / lanes / branch).
+// GraphEdge is one ordering edge: `To` runs after `From`.
 type GraphEdge struct {
 	From     string
 	To       string
 	Relation string
 }
 
-// GraphEdges derives the pipeline's dataflow edges. A reference in `when:`, `stdin:`,
-// `for_each:` or `lanes:` is a dependency (lobster resolves a `$ref` from a FINISHED
-// step, so the edge is the real scheduling constraint) — the two loop arms carry the
-// same kind of collection expression, so both are edges. Parallel branches and loop
-// sub-steps are attached to their parent with a `branch` edge.
+// GraphEdges derives the pipeline's ordering edges from every stage's `after:`.
+// The edge is the SCHEDULING constraint (the lowering emits stages in topological
+// order), so the drawing cannot disagree with the run.
 func GraphEdges(p *params.Pipeline) []GraphEdge {
 	var edges []GraphEdge
 	if p == nil {
 		return edges
 	}
-	for i := range p.Steps {
-		s := &p.Steps[i]
-		for _, rel := range [][2]string{{"when", s.When}, {"stdin", s.Stdin}, {"for_each", s.ForEach}, {"lanes", s.Lanes}} {
-			for _, name := range sdkworkflowkit.RefNames(rel[1]) {
-				edges = append(edges, GraphEdge{From: name, To: s.Id, Relation: rel[0]})
-			}
-		}
-		for j := range s.Parallel.Branches {
-			b := &s.Parallel.Branches[j]
-			edges = append(edges, GraphEdge{From: s.Id, To: b.Id, Relation: "branch"})
-			for _, rel := range [][2]string{{"when", b.When}, {"stdin", b.Stdin}} {
-				for _, name := range sdkworkflowkit.RefNames(rel[1]) {
-					edges = append(edges, GraphEdge{From: name, To: b.Id, Relation: rel[0]})
-				}
-			}
-		}
-		for j := range s.Steps {
-			b := &s.Steps[j]
-			edges = append(edges, GraphEdge{From: s.Id, To: b.Id, Relation: "branch"})
-			for _, rel := range [][2]string{{"when", b.When}, {"stdin", b.Stdin}} {
-				for _, name := range sdkworkflowkit.RefNames(rel[1]) {
-					edges = append(edges, GraphEdge{From: name, To: b.Id, Relation: rel[0]})
-				}
-			}
+	for _, name := range StageNames(p) {
+		for _, producer := range p.Stage[name].After {
+			edges = append(edges, GraphEdge{From: string(producer), To: name, Relation: "after"})
 		}
 	}
 	return edges
 }
 
-// GraphNodes returns every node id in the pipeline (steps, parallel branches and
-// for_each sub-steps), in declaration order, deduplicated.
+// GraphNodes returns every stage name in the order the lowering emits them. A cyclic
+// document has no such order; it falls back to the sorted names so a graph can still be
+// drawn for the author who has to fix it (the validator is what refuses the cycle).
 func GraphNodes(p *params.Pipeline) []string {
-	var out []string
-	seen := map[string]bool{}
-	add := func(id string) {
-		if id != "" && !seen[id] {
-			seen[id] = true
-			out = append(out, id)
-		}
-	}
 	if p == nil {
-		return out
+		return nil
 	}
-	for i := range p.Steps {
-		s := &p.Steps[i]
-		add(s.Id)
-		for j := range s.Parallel.Branches {
-			add(s.Parallel.Branches[j].Id)
-		}
-		for j := range s.Steps {
-			add(s.Steps[j].Id)
-		}
+	if order, err := StageOrder(p.Stage); err == nil {
+		return order
 	}
-	// An edge may name a step that lives outside this pipeline (an import ref); keep
-	// it visible rather than silently dropping the edge.
-	for _, e := range GraphEdges(p) {
-		add(e.From)
-		add(e.To)
-	}
-	return out
+	return StageNames(p)
 }
 
 // RenderGraph renders the pipeline graph in one of GraphFormat.
@@ -150,7 +110,7 @@ func GraphDot(p *params.Pipeline) string {
 }
 
 // GraphASCII renders the graph as an indented dependency listing — the terminal-
-// friendly form, each node followed by what it consumes.
+// friendly form, each stage followed by what it runs after.
 func GraphASCII(p *params.Pipeline) string {
 	byTarget := map[string][]GraphEdge{}
 	for _, e := range GraphEdges(p) {
@@ -173,8 +133,8 @@ func GraphASCII(p *params.Pipeline) string {
 	return b.String()
 }
 
-// mermaidID makes a step id safe as a mermaid node id (mermaid ids cannot carry the
-// punctuation a step id may).
+// mermaidID makes a stage name safe as a mermaid node id (mermaid ids cannot carry the
+// punctuation a name may).
 func mermaidID(id string) string {
 	var b strings.Builder
 	for _, r := range id {
@@ -186,7 +146,18 @@ func mermaidID(id string) string {
 		}
 	}
 	if b.Len() == 0 {
-		return "step"
+		return "stage"
 	}
 	return b.String()
+}
+
+// contains reports whether list holds want (the closed-vocabulary membership test the
+// renderers and the CLI share).
+func contains(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

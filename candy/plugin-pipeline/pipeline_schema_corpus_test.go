@@ -1,15 +1,15 @@
 package pluginpipeline
 
 // pipeline_schema_corpus_test.go — the closedness corpus for the `kind: pipeline`
-// AUTHORED body, which is THIS repo's own CUE (`schema/pipeline.cue`'s
-// `#PipelineValue` / `#PipelineApproval` / `#PipelineSchedule` / `#PipelineStep`).
+// AUTHORED body, which is THIS repo's own CUE (`schema/pipeline.cue`'s `#PipelineValue` /
+// `#PipelineSchedule`) plus the CONTRACT's stage vocabulary it imports
+// (`spec/schema/stage.cue`: `#Stage` / `#StageAlt` / `#StageAsk` / `#Retry` / `#Lane`).
 //
-// MOVED HERE FROM opencharly/spec AS PART OF spec#304 unit 1. While the body defs lived
-// in the contract module, `spec/pipeline_test.go` and `spec/workflow_envelope_test.go`
-// held these cases. Unit 1 moved the defs into this plugin's schema (leg 2) and unit 1's
-// last leg deletes them from `spec`, so the corpus moves with the defs it judges — a def
-// that no longer exists cannot be covered from the repo that no longer declares it, and
-// deleting the corpus instead would be a silent coverage loss.
+// P26 UNIT 2 RESHAPED IT: the authored body is `stage:` (a MAP of stages), and the stage's
+// fields are the contract's — there is no authored lobster step grammar left to cover, so
+// the cases that pinned `steps:`/`#PipelineStep`/`#PipelineApproval` retire WITH those
+// defs (R5). What replaces them covers the surface that exists: the four arms, every
+// scheduling field, and the closedness that a typo must keep failing.
 //
 // WHY IT IS A CLOSEDNESS CORPUS AND NOT A DECODE ROUND-TRIP (R2): the closure lives ONLY
 // in CUE. `cue exp gengotypes` renders every one of these fields as a plain Go `string` /
@@ -19,9 +19,9 @@ package pluginpipeline
 // and demands the same judgement the host's value gate makes on an authored charly.yml,
 // so it FAILS the moment a field is reopened or a retired alias is re-accepted.
 //
-// The schema is composed the way THIS plugin serves it — `schemacompose.ServedSchema`
-// over the embedded `schema/` (the same call `schema_test.go` makes) — so the corpus
-// exercises the shipped unit, never a hand-written excerpt of it.
+// The schema is composed the way THIS plugin serves it — `schemacompose.ServedSchema` over
+// the embedded `schema/` (the same call `schema_test.go` makes) — so the corpus exercises
+// the shipped unit, never a hand-written excerpt of it.
 
 import (
 	"testing"
@@ -46,7 +46,9 @@ func pipelineValueUnify(t *testing.T, schema cue.Value, defName, value string) e
 	return def.Unify(val).Validate(cue.Concrete(false), cue.Final())
 }
 
-// TestPipelineValueClosedness is the authored `kind: pipeline` body's closedness corpus.
+// TestPipelineValueClosedness is the authored `kind: pipeline` body's closedness corpus:
+// the four arms and every scheduling field are ADMITTED, and every shape the contract or
+// this repo's body closes is REFUSED.
 func TestPipelineValueClosedness(t *testing.T) {
 	schema := servedUnit(t)
 	def := schema.LookupPath(cue.ParsePath("#PipelineValue"))
@@ -59,192 +61,106 @@ func TestPipelineValueClosedness(t *testing.T) {
 		value  string
 		reject bool
 	}{
-		// --- accept: the lobster form ---
+		// --- admitted: the four arms ---
 		{
-			"shell step accepted",
-			`{description: "d", steps: [{id: "s1", run: "echo hi"}]}`,
+			"a step arm",
+			`{description: "d", stage: {build: {step: {step: [{run: "build it", command: "make"}]}}}}`,
 			false,
 		},
 		{
-			"full flow keys accepted",
-			`{description: "d", steps: [{
-				id: "s1", run: "echo hi",
-				when: "$prev.json.ok == true",
-				env: {FOO: "bar", BAR: "${pr}"},
-				cwd: "/tmp", stdin: "$prev.stdout",
-				timeout_ms: 5000, on_error: "continue",
-				retry: {max: 3, delay_ms: 100, factor: 2.0},
-				approval: {message: "ok?", timeout_ms: 60000},
-			}]}`,
+			"a pipeline arm",
+			`{description: "d", stage: {verify: {pipeline: {pipeline: "verify"}}}}`,
 			false,
 		},
 		{
-			"terse approval union accepted",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", approval: true}]}`,
+			"a deployment arm",
+			`{description: "d", stage: {bed: {deployment: {deployment: ["hello-pod"]}}}}`,
 			false,
 		},
 		{
-			"parallel accepted",
-			`{description: "d", steps: [{id: "s1", parallel: {wait: "any", branches: [
-				{id: "b1", run: "echo a"}, {id: "b2", run: "echo b"},
-			]}}]}`,
+			"an ask arm with its answer channel",
+			`{description: "d", stage: {confirm: {ask: {prompt: "publish?", answer: {expect: {equals: "yes"}}}}}}`,
+			false,
+		},
+		// --- admitted: the scheduling fields, in the contract's spelling ---
+		{
+			"every scheduling field",
+			`{description: "d", args: {beds: {description: "x"}},
+			  stage: {gate: {
+				after: ["build"], when: {publish: {equals: "yes"}},
+				timeout: "30m", retry: {attempt: 3, interval: "5s"},
+				on_error: "continue", lane: {over: "beds"}, concurrency: 2,
+				step: {step: [{run: "check", command: "charly check run $LANE_ITEM"}]},
+			  }}}`,
 			false,
 		},
 		{
-			"for_each with companions accepted",
-			`{description: "d", steps: [{
-				id: "s1", for_each: "$prev.json.items",
-				item_var: "it", index_var: "i", batch_size: 2, pause_ms: 10,
-				steps: [{id: "inner", run: "echo $it"}],
-			}]}`,
+			"an empty stage map is a Go rule, not a CUE one",
+			`{description: "d", stage: {}}`,
 			false,
 		},
 		{
-			"lanes with the pooled fan-out companions accepted",
-			`{description: "d", steps: [{
-				id: "s1", lanes: "$prev.json.items",
-				item_var: "it", index_var: "i", batch_size: 2,
-				steps: [{id: "inner", run: "echo $it"}],
-			}]}`,
+			"two arms is a Go rule too, so CUE must NOT reject it here",
+			`{description: "d", stage: {s: {step: {step: [{run: "x", command: "true"}]}, pipeline: {pipeline: "other"}}}}`,
 			false,
 		},
 
-		// --- accept: the charly form (the FULL #Step grammar, inside plan:) ---
+		// --- refused: what the closure is for ---
+		{"no stage at all rejected", `{description: "d"}`, true},
+		{"no description rejected", `{stage: {s: {step: {step: [{run: "x", command: "true"}]}}}}`, true},
 		{
-			"plan with a builtin verb accepted",
-			`{description: "d", steps: [{id: "s1", plan: [{run: "echo hi"}, {mkdir: "/tmp/wf"}]}]}`,
-			false,
-		},
-		{
-			"plan check intent accepted",
-			`{description: "d", steps: [{id: "s1", plan: [{check: "api is up", timeout: "30s"}]}]}`,
-			false,
-		},
-		{
-			"plan agent-run intent accepted",
-			`{description: "d", steps: [{id: "s1", plan: [{"agent-run": "summarise the diff"}]}]}`,
-			false,
-		},
-		{
-			"argv step accepted",
-			`{description: "d", steps: [{id: "s1", charly: ["task", "list"]}]}`,
-			false,
-		},
-		{
-			"argv step as a bare string accepted",
-			`{description: "d", steps: [{id: "s1", charly: "task list"}]}`,
-			false,
-		},
-
-		// --- accept: the workflow level ---
-		{
-			"workspace fields + a schedule trigger accepted",
-			`{
-				description: "d",
-				engine: "lobster",
-				args: {pr: {description: "the PR", required: true}},
-				env: {CI: "1"},
-				cwd: "/work",
-				cost_limit: 2.5,
-				triggers: [{manual: true}, {schedule: {cron: "0 9 * * 1-5", timezone: "UTC", persistent: true, args: {branch: "main"}}}],
-				config: {llm: {model: "x"}, redo: {max: 1}},
-				entities: {"my-task": {task: {description: "t", plan: [{run: "true"}]}}},
-				steps: [{id: "s1", run: "echo hi"}],
-			}`,
-			false,
-		},
-
-		// --- reject: exactly-one exec arm is a GO rule, but the arms must not silently
-		//     co-exist in a way the schema blesses ---
-		{
-			"two lobster exec arms are a Go rule, so CUE must NOT reject them here",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", pipeline: "other"}]}`,
-			false, // documented: the XOR is this repo's workflowkit.ValidatePipeline's job (see the schema header)
-		},
-
-		// --- reject ---
-		{
-			"unknown step key rejected",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", bogus: 1}]}`,
+			"an unknown stage field rejected",
+			`{description: "d", stage: {s: {step: {step: [{run: "x", command: "true"}]}, bogus: 1}}}`,
 			true,
 		},
 		{
-			"the retired `stages:` key rejected",
-			`{description: "d", stages: [{kind: "command", command: "echo hi"}]}`,
+			"the retired `steps:` body rejected",
+			`{description: "d", steps: [{id: "s1", run: "true"}]}`,
 			true,
 		},
 		{
-			"the retired `command:` alias rejected",
-			`{description: "d", steps: [{id: "s1", command: "echo hi"}]}`,
+			"the retired per-step `id:` rejected",
+			`{description: "d", stage: {s: {id: "s1", step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"the retired `skip_when:` alias rejected",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", skip_when: "@x.y == 1"}]}`,
+			"the retired expression `when:` rejected",
+			`{description: "d", stage: {s: {when: "$x.y == 1", step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"unknown workspace key rejected",
-			`{description: "d", concurrency: {lanes: 2}, steps: [{id: "s1", run: "echo hi"}]}`,
-			true, // `concurrency:` is CLI/`for_each` semantics now, never an entity key
-		},
-		{
-			"a step with no id rejected",
-			`{description: "d", steps: [{run: "echo hi"}]}`,
+			"an unknown on_error word rejected",
+			`{description: "d", stage: {s: {on_error: "explode", step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"a step with no exec arm is a Go rule too, so CUE must NOT reject it here either",
-			`{description: "d", steps: [{id: "s1", when: "true"}]}`,
-			false, // workflowkit.ValidatePipeline rejects both zero arms and two arms; see the schema header
-		},
-		{
-			"an empty steps list rejected",
-			`{description: "d", steps: []}`,
+			"an unknown retry field rejected",
+			`{description: "d", stage: {s: {retry: {max: 3}, step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"an empty charly argv rejected",
-			`{description: "d", steps: [{id: "s1", charly: []}]}`,
+			"a timeout without a unit rejected",
+			`{description: "d", stage: {s: {timeout: "30", step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"a bad on_error value rejected",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", on_error: "explode"}]}`,
+			"a lane without its parameter rejected",
+			`{description: "d", stage: {s: {lane: {}, step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 		{
-			"a zero timeout_ms rejected",
-			`{description: "d", steps: [{id: "s1", run: "echo hi", timeout_ms: 0}]}`,
+			"an ask without an answer channel rejected",
+			`{description: "d", stage: {s: {ask: {prompt: "publish?"}}}}`,
 			true,
 		},
 		{
-			"a schedule trigger with no cron rejected",
-			`{description: "d", triggers: [{schedule: {timezone: "UTC"}}], steps: [{id: "s1", run: "echo hi"}]}`,
+			"an unknown unanswered outcome rejected",
+			`{description: "d", stage: {s: {ask: {prompt: "p?", answer: {unanswered: "maybe"}}}}}`,
 			true,
 		},
 		{
-			"a parallel with no branches rejected",
-			`{description: "d", steps: [{id: "s1", parallel: {}}]}`,
-			true,
-		},
-		{
-			"a nested for_each in a substep rejected",
-			`{description: "d", steps: [{id: "s1", for_each: "$x", steps: [
-				{id: "inner", run: "echo hi", for_each: "$y"},
-			]}]}`,
-			true, // #PipelineSubStep is non-recursive by construction (lobster's own rule)
-		},
-		{
-			"a nested lanes in a substep rejected",
-			`{description: "d", steps: [{id: "s1", for_each: "$x", steps: [
-				{id: "inner", run: "echo hi", lanes: "$y", batch_size: 2},
-			]}]}`,
-			true, // #PipelineSubStep is non-recursive by construction (lobster's own rule)
-		},
-		{
-			"an empty lanes operand rejected",
-			`{description: "d", steps: [{id: "s1", lanes: "", batch_size: 2}]}`,
+			"an unknown body field rejected",
+			`{description: "d", concurrency: {lanes: 2}, stage: {s: {step: {step: [{run: "x", command: "true"}]}}}}`,
 			true,
 		},
 	} {
@@ -267,21 +183,18 @@ func TestPipelineValueClosedness(t *testing.T) {
 	}
 }
 
-// TestAuthoredSurfaceCarriesTheRuntimeArgList holds the authored defs this repo now owns
-// to the admission the engine wire gives them — moved here from spec's
-// `workflow_envelope_test.go` with the defs.
+// TestAuthoredSurfaceCarriesTheRuntimeArgList holds the authored def this repo still owns
+// to the admission the engine wire gives it.
 //
-// AN ARG IS THE ONLY CHANNEL a runtime value reaches an engine through, and an authored
-// `#PipelineSchedule.args` / a step's `workflow_args` is normalized VERBATIM into the
-// engine's `map[string]any`, so a scalar-only spelling here would be a second rule for
-// one question. The bound is pinned in both directions: a nested map or a list of lists
-// has no rendering into a per-arg binding, so it must be rejected here rather than
-// validate and then be dropped at execution time.
+// AN ARG IS THE ONLY CHANNEL a runtime value reaches an engine through, and the authored
+// `#PipelineSchedule.args` is normalized VERBATIM into the engine's `map[string]any`, so a
+// scalar-only spelling here would be a second rule for one question. The bound is pinned in
+// both directions: a nested map has no rendering into a per-arg binding, so it must be
+// rejected here rather than validate and then be dropped at execution time.
 //
-// The last case is the contract that keeps the engine envelope IR-only: the authored
-// `approval:` must NOT gain the engine's enrichment fields. If someone later mirrors
-// them here, that IS an authored wire-key change (every authored document stops
-// unifying against the CLOSED schema), and this test says so first.
+// THE STEP CASES RETIRED WITH THE LOBSTER STEP GRAMMAR (P26 unit 2): `#PipelineStep` and
+// `#PipelineApproval` no longer exist, so `workflow_args` and the approval enrichment
+// fields have no authored home to pin.
 func TestAuthoredSurfaceCarriesTheRuntimeArgList(t *testing.T) {
 	schema := servedUnit(t)
 
@@ -303,24 +216,6 @@ func TestAuthoredSurfaceCarriesTheRuntimeArgList(t *testing.T) {
 			`{cron: "0 * * * *", args: {prs: {nested: "x"}}}`,
 			true,
 		},
-		{
-			"a sub-workflow step carries a list arg",
-			"#PipelineStep",
-			`{id: "s1", workflow: "child", workflow_args: {prs: ["101", "102"]}}`,
-			false,
-		},
-		{
-			"a sub-workflow step still rejects a nested map arg",
-			"#PipelineStep",
-			`{id: "s1", workflow: "child", workflow_args: {prs: {nested: "x"}}}`,
-			true,
-		},
-		{
-			"the authored approval def does not gain the engine fields",
-			"#PipelineApproval",
-			`{message: "ok?", items: [1], approval_id: "a1b2c3d4"}`,
-			true,
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := pipelineValueUnify(t, schema, tc.def, tc.value)
@@ -334,8 +229,7 @@ func TestAuthoredSurfaceCarriesTheRuntimeArgList(t *testing.T) {
 	}
 }
 
-// The authored schedule's generated field must carry the RUNTIME-value type, not a
-// string: this assignment fails to compile if the def's `@go(Args,type=map[string]any)`
-// annotation ever narrows back to a scalar map. (The same compile-time assertion lived in
-// spec's `workflow_arg_list_wire_test.go`; it moved here with the def.)
+// The authored schedule's generated field must carry the RUNTIME-value type, not a string:
+// this assignment fails to compile if the def's `@go(Args,type=map[string]any)` annotation
+// ever narrows back to a scalar map.
 var _ map[string]any = params.PipelineSchedule{}.Args

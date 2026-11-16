@@ -68,18 +68,21 @@ Canonical files:
   `plugin-review` validator are separate workflows. Do not add a `review` verb or
   auto-merge here.
 - The authored `kind: pipeline` grammar lives in ONE place and it is HERE: the
-  entity body (`steps:`) is `#Pipeline`/`#PipelineValue` in `schema/pipeline.cue`, and
+  entity body (`stage:`) is `#Pipeline`/`#PipelineValue` in `schema/pipeline.cue`, and
   the load gate is this repo's `workflowkit.ValidatePipeline`. The schema declares the
   per-verb input shapes, the probe surface and the kind body, and IMPORTS everything
   the contract module owns — the six LLM defs, and the shared grammar defs the moved
   body references (`schema.#StrVal`, `schema.#Step`, `schema.#TaskParamSpec`,
   `schema.#WorkflowArgVal`) — one name, one home, never a local copy.
-- `workflowkit/` is the kind-aware machinery for THIS kind: `validate.go`, `lower.go`,
-  `graph.go` plus their tests and `testdata/`. It uses the CONTRACT's kinds-blind
-  helpers rather than restating them — `sdk/workflowkit.RefNames`/`Validate`/`RefIDs`
-  (the expression grammar) and `sdk/workflowkit.PlanRefs`/`RewritePlanRefs` (the plan
-  ref steps). A second copy of the ref grammar would be a second implementation of a
-  rule the validator also uses (R2), so never fork one.
+- `workflowkit/` is the kind-aware machinery for THIS kind: `stage.go` (the stage
+  model — arm exclusivity, the `after:` topology and the schema defaults), `validate.go`,
+  `lower.go`, `graph.go` plus their tests and `testdata/`. It uses the CONTRACT's
+  kinds-blind helpers rather than restating them — `sdk/workflowkit.PlanRefs`/
+  `RewritePlanRefs` (the plan ref steps, the one place a `$step.json.field` reference is
+  parsed). A second copy of that grammar would be a second implementation of a rule the
+  lowering's own ref plumbing depends on (R2), so never fork one. (The expression-grammar
+  helpers `RefNames`/`RefIDs`/`Validate` retired with the authored `when:` expression:
+  D-FLOW-1 makes a stage's condition a matcher, never an expression.)
 - Keep the `pipeline-skill:` entity in step with any provider-surface change — it
   is the projected source for `/charly-pipeline:pipeline`.
 

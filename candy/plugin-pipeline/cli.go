@@ -67,17 +67,17 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline validate <entity>")
 		}
-		p, err := loadEntity(rest[0])
+		p, err := loadEntity(rest[0], ex)
 		if err != nil {
 			return 1, err
 		}
-		fmt.Printf("pipeline %s: valid (%d steps)\n", rest[0], len(p.Steps))
+		fmt.Printf("pipeline %s: valid (%s)\n", rest[0], workflowkit.StageSummary(&p))
 		return 0, nil
 	case "run":
 		if len(rest) == 0 {
 			return 2, fmt.Errorf("pipeline run <entity>")
 		}
-		p, err := loadEntity(rest[0])
+		p, err := loadEntity(rest[0], ex)
 		if err != nil {
 			return 1, err
 		}
@@ -101,8 +101,8 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			return 1, werr
 		}
 		if has(rest, "--dry-run") {
-			fmt.Printf("pipeline %s: dry-run OK — lowered %d steps to %s (workflow.lobster + charly.yml written, not dispatched)\n",
-				name, len(p.Steps), genDir)
+			fmt.Printf("pipeline %s: dry-run OK — lowered %s to %s (workflow.lobster + charly.yml written, not dispatched)\n",
+				name, workflowkit.StageSummary(&p), genDir)
 			return 0, nil
 		}
 		engine := p.Engine
@@ -142,7 +142,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			return 2, fmt.Errorf("pipeline resume <entity> [--token T | --id I] [--approve yes|no] [--response-json J] [--cancel]")
 		}
 		name := rest[0]
-		p, err := loadEntity(name)
+		p, err := loadEntity(name, ex)
 		if err != nil {
 			return 1, err
 		}
@@ -198,7 +198,7 @@ func runCLI(args []string, ex *sdk.Executor) (int, error) {
 			if name == "" {
 				return 2, fmt.Errorf("pipeline schedule %s <entity>", sop)
 			}
-			p, lerr := loadEntity(name)
+			p, lerr := loadEntity(name, ex)
 			if lerr != nil {
 				return 1, lerr
 			}

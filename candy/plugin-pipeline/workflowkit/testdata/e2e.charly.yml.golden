@@ -8,14 +8,29 @@
 # the ONE form that works for a flat import.
 import:
     - ../../../charly.yml
+_pipeline-e2e-fetch:
+    task:
+        description: lowered from pipeline stage e2e/fetch
+        plan:
+            - run: fetch the facts
+              command: printf '{"name":"ok","n":3}'
 _pipeline-e2e-probe:
     task:
-        description: lowered from pipeline step e2e/probe
+        description: lowered from pipeline stage e2e/probe
         plan:
             - run: the ref reaches the charly step shell-safely
               command: printf "NAME=%s\n" "${REF_1}"
-            - run: a plugin verb dispatches through the core registry
-              task:
-                task: hello
             - run: a passed-through env var expands
               command: echo "N=${REF_2}"
+_pipeline-e2e-bed:
+    task:
+        description: lowered from pipeline stage e2e/bed
+        plan:
+            - check: the deployment hello-pod passes its checks
+              command: /usr/local/bin/charly check run hello-pod
+_pipeline-e2e-final:
+    task:
+        description: lowered from pipeline stage e2e/final
+        plan:
+            - run: the flow is done
+              command: echo '{"done":true}'

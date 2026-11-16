@@ -28,7 +28,7 @@ check-pipeline-app:
 
 # check-pipeline-local — the R10 witness for the front-end: the hard cutover from the
 # retired home-grown pipeline grammar (a stage list / #*Stage / the in-process executor) to
-# the wave design — the authored entity is this plugin's own `#Pipeline` (`steps:`),
+# the wave design — the authored entity is this plugin's own `#Pipeline` (`stage:`),
 # validated by workflowkit.ValidatePipeline, lowered by workflowkit.Lower to the
 # (workflow.lobster, charly.yml) pair, and dispatched to the `workflow` provider class as
 # workflow-run. Every step runs `${CHARLY_BIN}` host-side in a mktemp project, so the
@@ -66,7 +66,7 @@ check-pipeline-local:
         lifecycle: dev
         description: >-
             The workflow front-end's R10 witness: `charly pipeline validate|run` resolves,
-            validates and lowers an authored `kind:pipeline` (#Pipeline, `steps:`) and
+            validates and lowers an authored `kind:pipeline` (#Pipeline, `stage:`) and
             dispatches the lowered pair to the workflow engine — the hard cutover off the
             retired stage-list/#*Stage in-process executor, proven on a disposable local deploy.
         plan:
@@ -76,7 +76,7 @@ check-pipeline-local:
                 - runtime
               exit_status: 0
               stdout:
-                - contains: 'mixed-plan: valid (2 steps)'
+                - contains: 'valid (2 stages: build, verify)'
               command:
                 command: |-
                   d=$(mktemp -d); mkdir -p "$d/candy/x"
@@ -85,15 +85,20 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
-                        - id: verify
-                          when: $build.exit_code == 0
-                          plan:
-                            - run: grade the build result
-                              gate:
-                                condition: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
+                        verify:
+                          after: [build]
+                          step:
+                            step:
+                              - run: grade the build result
+                                gate:
+                                  condition: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate mixed-plan
                   rc=$?; rm -rf "$d"; exit $rc
@@ -104,7 +109,7 @@ check-pipeline-local:
                 - runtime
               exit_status: 1
               stderr:
-                - contains: 'execution arms set'
+                - contains: 'exactly one of step, pipeline, deployment, ask'
               command:
                 command: |-
                   d=$(mktemp -d); mkdir -p "$d/candy/x"
@@ -112,11 +117,16 @@ check-pipeline-local:
                   cat > "$d/candy/x/charly.yml" <<'YAML'
                   broken-plan:
                     pipeline:
-                      description: two execution arms on one step
-                      steps:
-                        - id: s
-                          run: "true"
-                          pipeline: other
+                      description: two arms on one stage
+                      stage:
+                        s:
+                          step:
+                            step:
+                              - run: x
+                                command:
+                                  command: "true"
+                          pipeline:
+                            pipeline: other
                   YAML
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline validate broken-plan
                   rc=$?; rm -rf "$d"; exit $rc
@@ -136,14 +146,20 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
-                        - id: verify
-                          plan:
-                            - run: grade the build result
-                              gate:
-                                condition: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
+                        verify:
+                          after: [build]
+                          step:
+                            step:
+                              - run: grade the build result
+                                gate:
+                                  condition: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
                   rc=$?
@@ -167,14 +183,20 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
-                        - id: verify
-                          plan:
-                            - run: grade the build result
-                              gate:
-                                condition: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
+                        verify:
+                          after: [build]
+                          step:
+                            step:
+                              - run: grade the build result
+                                gate:
+                                  condition: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan --dry-run
                   rc=$?
@@ -201,9 +223,13 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"n":3}' --dry-run
                   rc=$?; rm -rf "$d"; exit $rc
@@ -223,9 +249,13 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --mode banana --dry-run
                   rc=$?; rm -rf "$d"; exit $rc
@@ -245,9 +275,13 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run mixed-plan --args-json '{"who":"world"}' --mode tool --dry-run
                   rc=$?; rm -rf "$d"; exit $rc
@@ -267,15 +301,20 @@ check-pipeline-local:
                   mixed-plan:
                     pipeline:
                       description: a mixed-grammar plan
-                      steps:
-                        - id: build
-                          run: "true"
-                        - id: verify
-                          when: $build.exit_code == 0
-                          plan:
-                            - run: grade the build result
-                              gate:
-                                condition: "true"
+                      stage:
+                        build:
+                          step:
+                            step:
+                              - run: build runs
+                                command:
+                                  command: "true"
+                        verify:
+                          after: [build]
+                          step:
+                            step:
+                              - run: grade the build result
+                                gate:
+                                  condition: "true"
                   YAML
                   CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run mixed-plan
                   rc=$?; rm -rf "$d"; exit $rc
@@ -295,49 +334,54 @@ check-pipeline-local:
                   lifted-verbs-plan:
                     pipeline:
                       description: three lifted verb bodies with deterministic artifacts
-                      # A lifted verb needs BOTH load gates satisfied, and each is its own
-                      # error: a verb KEY is not itself an execution arm ("no execution arm
-                      # — set exactly one of run/pipeline/.../plan/..."), and inside `plan:`
-                      # the step still needs an INTENT keyword ("plan[0] has no intent
-                      # keyword (run/check/agent-run/agent-check/include)"). So a lifted verb
-                      # is spelled as a plan step carrying an intent label AND the verb key,
-                      # exactly like the `gate:` step above — never as bare step-level sugar.
-                      steps:
-                        - id: render
-                          plan:
-                            - run: render the greeting
-                              generate:
-                                template: "hello ${who}"
-                                vars:
-                                  who: world
-                                out: "@OUTDIR@/rendered.txt"
-                        - id: emit
-                          plan:
-                            - run: emit the record
-                              emit:
-                                schema: '#Record: {name: string}'
-                                value:
-                                  name: rendered
-                                out: "@OUTDIR@/emitted.yml"
-                        - id: verify
-                          plan:
-                            - run: probe the emitted artifact on disk
-                              probe:
-                                verbs: [artifact]
-                                input:
-                                  path: "@OUTDIR@/emitted.yml"
-                                  min_bytes: 1
+                      # A lifted verb needs BOTH load gates satisfied: a stage sets exactly
+                      # one ARM (step | pipeline | deployment | ask), and inside that arm's
+                      # `step:` list each plan element still needs an INTENT keyword
+                      # (run/check/agent-run/agent-check/include) beside the verb key. So a
+                      # lifted verb is a stage whose `step:` carries an intent label AND the
+                      # verb key, exactly like the `gate:` stage above — never bare sugar.
+                      stage:
+                        render:
+                          step:
+                            step:
+                              - run: render the greeting
+                                generate:
+                                  template: "hello ${who}"
+                                  vars:
+                                    who: world
+                                  out: "@OUTDIR@/rendered.txt"
+                        emit:
+                          after: [render]
+                          step:
+                            step:
+                              - run: emit the record
+                                emit:
+                                  schema: '#Record: {name: string}'
+                                  value:
+                                    name: rendered
+                                  out: "@OUTDIR@/emitted.yml"
+                        verify:
+                          after: [emit]
+                          step:
+                            step:
+                              - run: probe the emitted artifact on disk
+                                probe:
+                                  verbs: [artifact]
+                                  input:
+                                    path: "@OUTDIR@/emitted.yml"
+                                    min_bytes: 1
                   lifted-verbs-negative:
                     pipeline:
                       description: the artifact probe must really consult the filesystem
-                      steps:
-                        - id: verify
-                          plan:
-                            - run: probe a path that does not exist
-                              probe:
-                                verbs: [artifact]
-                                input:
-                                  path: "@OUTDIR@/no-such-artifact"
+                      stage:
+                        verify:
+                          step:
+                            step:
+                              - run: probe a path that does not exist
+                                probe:
+                                  verbs: [artifact]
+                                  input:
+                                    path: "@OUTDIR@/no-such-artifact"
                   YAML
                   sed -i "s|@OUTDIR@|$d|g" "$d/candy/x/charly.yml"
                   rc=0
@@ -375,9 +419,10 @@ check-pipeline-local:
                   gate-plan:
                     pipeline:
                       description: a plan that pauses on an approval
-                      steps:
-                        - id: ask
-                          approval: true
+                      stage:
+                        ask:
+                          prompt: approve this run
+                          answer: {}
                   YAML
                   rc=0
                   # `approval` is an EXECUTION ARM (the arms are run|pipeline|workflow|parallel|
@@ -412,9 +457,10 @@ check-pipeline-local:
                   gate-plan:
                     pipeline:
                       description: a plan that pauses on an approval
-                      steps:
-                        - id: ask
-                          approval: true
+                      stage:
+                        ask:
+                          prompt: approve this run
+                          answer: {}
                   YAML
                   rc=0
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run gate-plan > "$d/run.out" 2>&1 || rc=1
@@ -425,49 +471,34 @@ check-pipeline-local:
                   [ "$rc" -eq 0 ] && echo 'resume-approval-no OK'
                   exit $rc
                 in_container: false
-            - check: the same resume leg answers an INPUT gate — `--response-json` reaches the engine, the paused step's `$ask.response.<path>` resolves, and the run finishes
-              id: pipeline-resume-input-json
+            - check: the ask arm lowers to the ENGINE'S APPROVAL gate — the prompt becomes its message, and no input gate is emitted (the engine's input gate is validated by a JSON Schema, which the contract's matcher-based answer channel cannot express)
+              id: pipeline-lowered-ask-is-an-approval-gate
               context:
                 - runtime
               exit_status: 0
               stdout:
-                - contains: 'resume-input-json OK'
+                - contains: 'ask-approval OK'
               command:
                 command: |-
                   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT; mkdir -p "$d/candy/x"
                   printf 'discover:\n    - path: candy\n      recursive: true\n' > "$d/charly.yml"
                   cat > "$d/candy/x/charly.yml" <<'YAML'
-                  ask:
+                  gate-plan:
                     pipeline:
-                      description: an input gate
-                      steps:
-                        - id: ask
-                          input:
-                            prompt: which branch?
-                            response_schema:
-                              type: object
-                              properties:
-                                branch:
-                                  type: string
-                              required:
-                                - branch
-                        - id: finish
-                          run: printf '%s' "$ask.response.branch" > answered.marker
+                      description: an ask lowering probe
+                      stage:
+                        ask:
+                          prompt: approve this run
+                          answer: {}
                   YAML
                   rc=0
-                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline run ask > "$d/run.out" 2>&1 || rc=1
-                  grep -q 'status=needs_input' "$d/run.out" || rc=1
-                  grep -q 'input is pending' "$d/run.out" || rc=1
-                  # the gate halted the run: nothing after the input step has run yet
-                  test ! -e "$d/answered.marker" || rc=1
-                  CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline resume ask --response-json '{"branch":"feature/x"}' > "$d/res.out" 2>&1 || rc=1
-                  grep -q 'resumed via workflow:lobster — status=ok' "$d/res.out" || rc=1
-                  # a RESUMED input answer is recorded as `response`, never as `json`
-                  # (engine.go applyResume: Response + HasResp), so `$ask.response.branch`
-                  # is the ref that resolves it — this marker is the proof the whole loop closed
-                  [ "$(cat "$d/answered.marker" 2>/dev/null)" = "feature/x" ] || rc=1
-                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" "$d/res.out" >&2 2>/dev/null; fi
-                  [ "$rc" -eq 0 ] && echo 'resume-input-json OK'
+                  CHARLY_PROJECT_DIR="$d" CHARLY_BIN=${CHARLY_BIN} ${CHARLY_BIN} pipeline run gate-plan --dry-run > "$d/run.out" 2>&1 || rc=1
+                  g="$d/.opencharly/pipelines/gate-plan/workflow.lobster"
+                  grep -q 'approval: approve this run' "$g" || rc=1
+                  grep -q 'needs_approval\|approval' "$g" || rc=1
+                  grep -q 'input:' "$g" && rc=1
+                  if [ "$rc" -ne 0 ]; then echo "[FAIL] rc=$rc" >&2; cat "$d/run.out" >&2 2>/dev/null; [ -f "$g" ] && cat "$g" >&2; fi
+                  [ "$rc" -eq 0 ] && echo 'ask-approval OK'
                   exit $rc
                 in_container: false
             - check: '`pipeline resume` with no entity is refused with its usage line, never a silent no-op'
@@ -520,9 +551,13 @@ check-pipeline-local:
                       triggers:
                         - schedule:
                             cron: "13 3 * * *"
-                      steps:
-                        - id: s
-                          run: "true"
+                      stage:
+                        s:
+                          step:
+                            step:
+                              - run: s runs
+                                command:
+                                  command: "true"
                   YAML
                   rc=0
                   CHARLY_PROJECT_DIR="$d" ${CHARLY_BIN} pipeline schedule apply "$name" > "$d/apply.out" 2>&1 || rc=1
@@ -565,9 +600,13 @@ check-pipeline-local:
                       triggers:
                         - schedule:
                             cron: "13 3 * * *"
-                      steps:
-                        - id: s
-                          run: "true"
+                      stage:
+                        s:
+                          step:
+                            step:
+                              - run: s runs
+                                command:
+                                  command: "true"
                   YAML
                   rc=0
                   # no `apply` in this step, so the timer cannot be installed: the op must refuse

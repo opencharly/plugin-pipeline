@@ -1,13 +1,12 @@
-name: fan
-description: nested plan fixture
+name: nested
+description: ordering chain fixture
 steps:
-    - id: setup
-      run: "true"
-    - id: fan
-      parallel:
-        wait: all
-        branches:
-            - id: b1
-              run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/fan task _pipeline-fan-b1 --output
-            - id: b2
-              run: echo $setup.exit_code
+    - id: zulu
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/nested task _pipeline-nested-zulu --output
+    - id: middle
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/nested task _pipeline-nested-middle --output
+    - id: alpha
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/nested task _pipeline-nested-alpha --output

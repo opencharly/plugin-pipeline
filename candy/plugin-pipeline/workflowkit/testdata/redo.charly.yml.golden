@@ -8,31 +8,9 @@
 # the ONE form that works for a flat import.
 import:
     - ../../../charly.yml
-_pipeline-redo-oracle:
+_pipeline-redo-flaky:
     task:
-        description: lowered from pipeline step redo/oracle
+        description: lowered from pipeline stage redo/flaky
         plan:
-            - run: rewind the oracle
-              task:
-                redo:
-                    escalate_after: 5
-                    max: 4
-                    triggers:
-                        redo-plan: oracle
-                task: oracle
-_pipeline-redo-renode:
-    task:
-        description: lowered from pipeline step redo/renode
-        plan:
-            - task:
-                redo:
-                    max: 2
-                    triggers:
-                        redo-plan: renode
-                task: renode
-_pipeline-redo-plain:
-    task:
-        description: lowered from pipeline step redo/plain
-        plan:
-            - task:
-                task: plain
+            - run: retry me
+              command: echo retry

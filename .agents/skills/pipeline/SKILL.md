@@ -30,7 +30,7 @@ description: 'The `charly pipeline` workflow front-end — resolve/validate/lowe
 - skills by `@github` candy refs.
 
 Every workflow is a DECLARED pipeline (`kind:pipeline` entity: this plugin's own
-`#Pipeline` with `steps:`), so the engine is config-driven rather than code-driven.
+`#Pipeline` with `stage:`), so the engine is config-driven rather than code-driven.
 
 ## When to use it
 

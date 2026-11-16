@@ -193,125 +193,29 @@ import "github.com/opencharly/spec/schema"
 // plan and the workflow wire share them — a pipeline body and the plan it lowers to
 // must not be able to disagree about what a step or an arg value is.
 //
-// NOTHING HERE NAMES A STEP ARM IN CODE. The exec-arm exclusivity is a Go rule in this
-// repo's `workflowkit.ValidatePipeline` (a CUE disjunction at entity level breaks the
-// closedness of the surrounding def), and the lowering special-cases no word, so a
-// plugin released tomorrow is usable in a workflow with no change to this file.
-
-// #PipelineRetry — lobster `retry`: retry the failed step up to `max` attempts.
-#PipelineRetry: {
-	max?:      int & >0
-	delay_ms?: int & >=0 @go(DelayMs)
-	factor?:   number & >=1
-}
-
-// #PipelineApproval — the OBJECT form of lobster `approval`. The AUTHORED form is a
-// union (bool | string | this struct) so `approval: true` stays terse; an engine
-// normalizes it to this object form before it evaluates the gate.
-#PipelineApproval: {
-	message?:    string & !=""
-	timeout_ms?: int & >0 @go(TimeoutMs)
-}
-
-// #PipelineFlow — the flow keys EVERY pipeline step carries, whatever its exec arm.
-// Embedded by each step def (gengotypes FLATTENS an embedded def into the parent
-// struct; verified against cue v0.16.1). It deliberately does NOT carry `approval`,
-// which both step defs declare with their own type.
-#PipelineFlow: {
-	id!:         string & !=""
-	when?:       string & !=""
-	env?:        {PATH?: _|_, [string]: schema.#StrVal} @go(Env,type=map[string]string)
-	cwd?:        string & !=""
-	stdin?:      string & !=""
-	timeout_ms?: int & >0 @go(TimeoutMs)
-	on_error?:   or(_onErrorWord) @go(OnError)
-	retry?:      #PipelineRetry
-}
-
-// #PipelineArms — the EXEC arms the authored pipeline step carries. Declared ONCE here
-// (R3) and embedded by #PipelineStepBase, so the arms cannot drift from the step that
-// uses them; #PipelineSubStep deliberately re-declares its own NON-RECURSIVE subset
-// (lobster's rule: no nested parallel/for_each/input/workflow inside a branch).
+// THE STAGE BODY IS THE CONTRACT'S (P26 unit 2, opencharly/plugin-pipeline#66).
+// `stage:` is a MAP keyed by stage name — DESIGN.cue:890 writes
+// `stage!: {[#Name]: #Stage}` — and each value is the contract's #Stage
+// (`schema/stage.cue`, imported), so `after:`/`when:`/`lane:`/`concurrency:`/`retry:`/
+// `timeout:`/`on_error:` and the four arms are the CONTRACT's shapes, never restated
+// here (R2: one definition of the stage vocabulary, and it is the contract's).
 //
-// It deliberately does NOT carry `approval`: that lives on #PipelineStepBase, because a
-// step INSIDE `parallel.branches[]` / `for_each.steps[]` must not open a gate. The
-// exec-arm XOR (exactly one of them) is a Go rule in plugin-pipeline's OpValidate, not a
-// CUE disjunction.
-#PipelineArms: {
-	// --- lobster exec arms ---
-	run?:           string & !=""
-	pipeline?:      string & !=""
-	workflow?:      string & !=""
-	// workflow_args — the sub-workflow invocation's RUNTIME arg values, so the SAME
-	// admission as `#WorkflowRunRequest.args` (`schema.#WorkflowArgVal`). The lowered step's
-	// `workflow_args` is the engine's own `{[string]: _}` (lobster.cue) and lands in the
-	// same `resolveWorkflowArgs(map[string]any)` the run request does, so a scalar-only
-	// spelling here would be a SECOND rule for one question — "what may a workflow arg
-	// value be" — and a lane that works at the top level would fail one step down.
-	workflow_args?: {[string]: schema.#WorkflowArgVal} @go(WorkflowArgs,type=map[string]any)
-	parallel?:      #PipelineParallel
-	for_each?:      string & !="" @go(ForEach)
-	lanes?:         string & !="" @go(Lanes)
-	input?:         #PipelineInput
-
-	// --- for_each / lanes companions (meaningful only alongside for_each or lanes) ---
-	item_var?:   string & !="" @go(ItemVar)
-	index_var?:  string & !="" @go(IndexVar)
-	batch_size?: int & >0 @go(BatchSize)
-	pause_ms?:   int & >=0 @go(PauseMs)
-	steps?:      [...#PipelineSubStep]
-
-	// --- charly arms: the FULL charly grammar, any plugin of any class ---
-	plan?:   [...schema.#Step]
-	charly?: [string, ...string] | (string & !="") @go(Charly,type=[]string)
-}
-
-// #PipelineInput — the lobster `input` gate. `response_schema` is a JSON Schema
-// document; the engine validates the resume response against it
-// (cuelang.org/go/encoding/jsonschema). The `.lobster` importer maps lobster's own
-// `responseSchema` spelling onto this charly snake_case key.
-#PipelineInput: {
-	prompt!:          string & !=""
-	response_schema?: {[string]: _} @go(ResponseSchema,type=map[string]any)
-	defaults?:        {[string]: schema.#StrVal} @go(Defaults,type=map[string]string)
-}
-
-// #PipelineSubStep — a step INSIDE `parallel.branches[]` or `for_each.steps[]`. It is
-// NON-RECURSIVE by construction (lobster's own rule): no nested parallel/for_each/
-// input/workflow and no approval, so a workflow stays flat and exportable.
-#PipelineSubStep: {
-	// The SAME flow block every other step def carries — embedded, never
-	// re-declared (R3). gengotypes flattens it exactly as it does for
-	// #PipelineStepBase, so the substep's Go shape is unchanged.
-	#PipelineFlow
-
-	run?:      string & !=""
-	pipeline?: string & !=""
-	plan?:     [...schema.#Step]
-	charly?:   [string, ...string] | (string & !="") @go(Charly,type=[]string)
-}
-
-// #PipelineParallel — lobster `parallel`. `wait: "any"` returns the first branch and
-// cancels the rest; `wait: "all"` (the default) collects every branch.
-#PipelineParallel: {
-	wait?:       *"all" | "any"
-	timeout_ms?: int & >0 @go(TimeoutMs)
-	branches!:   [#PipelineSubStep, ...#PipelineSubStep]
-}
-
-// #PipelineStepBase — one authored workflow step.
-#PipelineStepBase: {
-	#PipelineFlow
-	#PipelineArms
-
-	// approval — terse authored union; an engine normalizes it to #PipelineApproval.
-	approval?: bool | string | #PipelineApproval @go(Approval,type=any)
-}
-
-// #PipelineStep — the step type `steps:` carries: the authored step, named so a step
-// consumer (this repo's workflowkit) has a stable type to build on without reaching for the
-// base def.
-#PipelineStep: #PipelineStepBase
+// "EXACTLY ONE ARM" IS A GO RULE (`workflowkit.ValidatePipeline`). The contract
+// records why it cannot be a CUE rule: both the arm spread and `or()` over the arms
+// fail that module's composition, so the arms are four OPTIONAL payload fields and
+// the exclusivity is validated, exactly as it was before this unit for the lobster
+// arms.
+//
+// THERE IS NO LONGER A LOBSTER-STEP GRAMMAR HERE, and no `steps:` (hard cutover):
+// `steps:`, #PipelineStepBase, #PipelineStep, #PipelineArms, #PipelineFlow,
+// #PipelineSubStep, #PipelineParallel, #PipelineInput, #PipelineRetry and
+// #PipelineApproval are DELETED. The authored surface is the STAGE; the lobster IR
+// is what the LOWERING emits (steps/parallel/lanes are engine words now, never
+// authored ones). #Retry, #Lane, #StageWhen, #StageAsk and #Answer are the contract's.
+//
+// A STAGE'S `id` IS ITS KEY. D-KIND-3 makes a node's key its identity, so the map key
+// names the stage (`after:` refers to it) and the lowering uses it as the lobster
+// step id.
 
 // #PipelineSchedule — the cron trigger. A 5-field cron, the SAME grammar
 // deploy.schedule, a k8s CronJob and GitHub Actions `on.schedule` use, so one
@@ -349,7 +253,9 @@ import "github.com/opencharly/spec/schema"
 	description!: string & !=""
 	// engine — the workflow engine word, resolved against the `workflow` PROVIDER
 	// CLASS and dispatched as InvokeProvider("workflow", <engine>, workflow-run|…)
-	// through the normal path. Default "lobster".
+	// through the normal path. Default "lobster". (Whether the pipeline kind may keep
+	// a provider word at all is opencharly/plugin-pipeline#67's decision, not this
+	// schema's.)
 	engine?:     string & !=""
 	args?:       {[string]: schema.#TaskParamSpec}
 	env?:        {PATH?: _|_, [string]: schema.#StrVal} @go(Env,type=map[string]string)
@@ -361,7 +267,11 @@ import "github.com/opencharly/spec/schema"
 	// schema change.
 	config?:   {[string]: _} @go(Config,type=map[string]any)
 	entities?: {[string]: {...}} @go(Entities,type=map[string]map[string]any)
-	steps!:    [#PipelineStep, ...#PipelineStep]
+	// stage — the pipeline's stages, keyed by NAME. The map is unordered by
+	// construction, so the ONE order is the graph `after:` declares: the lowering
+	// orders the stages topologically (ties broken by name, so an emission is
+	// reproducible) and a cycle is a load error naming the stages in it.
+	stage!: {[string]: schema.#Stage}
 }
 
 // #PipelineValue — the HOST-SIDE value gate def for the `pipeline` kind (the
@@ -370,14 +280,3 @@ import "github.com/opencharly/spec/schema"
 // (plugin.go's InputDef), which is how the HOST resolves the gate for this kind
 // without carrying any knowledge of it.
 #PipelineValue: #Pipeline @go(-)
-
-// --- vocabularies this file owns ----------------------------------------------
-// Every closed set of words is a table keyed by word and `<x>Word` is derived from it,
-// so the table and the enum cannot disagree and a new word is ONE row here. The
-// contract module's vocabulary generator does not reach into a plugin, so these
-// tables carry no `@vocab` owner attribute — there is no generator here to read one,
-// and the set is compiled into THIS module.
-
-// #PipelineFlow.on_error
-_onError: {fail: {}, continue: {}, skip_rest: {}}
-_onErrorWord: [for w, _ in _onError {w}]

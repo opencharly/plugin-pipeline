@@ -240,213 +240,6 @@ type PipelineGateInput struct {
 	Condition string `yaml:"condition,omitempty" json:"condition"`
 }
 
-// #PipelineRetry — lobster `retry`: retry the failed step up to `max` attempts.
-type PipelineRetry struct {
-	Max int64 `yaml:"max,omitempty" json:"max,omitempty"`
-
-	DelayMs int64 `yaml:"delay_ms,omitempty" json:"delay_ms,omitempty"`
-
-	Factor any/* CUE number; int64 or float64 */ `yaml:"factor,omitempty" json:"factor,omitempty"`
-}
-
-// #PipelineApproval — the OBJECT form of lobster `approval`. The AUTHORED form is a
-// union (bool | string | this struct) so `approval: true` stays terse; an engine
-// normalizes it to this object form before it evaluates the gate.
-type PipelineApproval struct {
-	Message string `yaml:"message,omitempty" json:"message,omitempty"`
-
-	TimeoutMs int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-}
-
-// #PipelineFlow — the flow keys EVERY pipeline step carries, whatever its exec arm.
-// Embedded by each step def (gengotypes FLATTENS an embedded def into the parent
-// struct; verified against cue v0.16.1). It deliberately does NOT carry `approval`,
-// which both step defs declare with their own type.
-type PipelineFlow struct {
-	Id string `yaml:"id,omitempty" json:"id"`
-
-	When string `yaml:"when,omitempty" json:"when,omitempty"`
-
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-
-	Cwd string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-
-	Stdin string `yaml:"stdin,omitempty" json:"stdin,omitempty"`
-
-	TimeoutMs int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-
-	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
-
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
-}
-
-// #PipelineArms — the EXEC arms the authored pipeline step carries. Declared ONCE here
-// (R3) and embedded by #PipelineStepBase, so the arms cannot drift from the step that
-// uses them; #PipelineSubStep deliberately re-declares its own NON-RECURSIVE subset
-// (lobster's rule: no nested parallel/for_each/input/workflow inside a branch).
-//
-// It deliberately does NOT carry `approval`: that lives on #PipelineStepBase, because a
-// step INSIDE `parallel.branches[]` / `for_each.steps[]` must not open a gate. The
-// exec-arm XOR (exactly one of them) is a Go rule in plugin-pipeline's OpValidate, not a
-// CUE disjunction.
-type PipelineArms struct {
-	// --- lobster exec arms ---
-	Run string `yaml:"run,omitempty" json:"run,omitempty"`
-
-	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
-
-	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-
-	// workflow_args — the sub-workflow invocation's RUNTIME arg values, so the SAME
-	// admission as `#WorkflowRunRequest.args` (`schema.#WorkflowArgVal`). The lowered step's
-	// `workflow_args` is the engine's own `{[string]: _}` (lobster.cue) and lands in the
-	// same `resolveWorkflowArgs(map[string]any)` the run request does, so a scalar-only
-	// spelling here would be a SECOND rule for one question — "what may a workflow arg
-	// value be" — and a lane that works at the top level would fail one step down.
-	WorkflowArgs map[string]any `yaml:"workflow_args,omitempty" json:"workflow_args,omitempty"`
-
-	Parallel PipelineParallel `yaml:"parallel,omitempty" json:"parallel,omitempty"`
-
-	ForEach string `yaml:"for_each,omitempty" json:"for_each,omitempty"`
-
-	Lanes string `yaml:"lanes,omitempty" json:"lanes,omitempty"`
-
-	Input PipelineInput `yaml:"input,omitempty" json:"input,omitempty"`
-
-	// --- for_each / lanes companions (meaningful only alongside for_each or lanes) ---
-	ItemVar string `yaml:"item_var,omitempty" json:"item_var,omitempty"`
-
-	IndexVar string `yaml:"index_var,omitempty" json:"index_var,omitempty"`
-
-	BatchSize int64 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-
-	PauseMs int64 `yaml:"pause_ms,omitempty" json:"pause_ms,omitempty"`
-
-	Steps []PipelineSubStep `yaml:"steps,omitempty" json:"steps,omitempty"`
-
-	// --- charly arms: the FULL charly grammar, any plugin of any class ---
-	Plan []spec.Step `yaml:"plan,omitempty" json:"plan,omitempty"`
-
-	Charly []string `yaml:"charly,omitempty" json:"charly,omitempty"`
-}
-
-// #PipelineParallel — lobster `parallel`. `wait: "any"` returns the first branch and
-// cancels the rest; `wait: "all"` (the default) collects every branch.
-type PipelineParallel struct {
-	Wait string `yaml:"wait,omitempty" json:"wait,omitempty"`
-
-	TimeoutMs int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-
-	Branches []PipelineSubStep `yaml:"branches,omitempty" json:"branches"`
-}
-
-// #PipelineSubStep — a step INSIDE `parallel.branches[]` or `for_each.steps[]`. It is
-// NON-RECURSIVE by construction (lobster's own rule): no nested parallel/for_each/
-// input/workflow and no approval, so a workflow stays flat and exportable.
-type PipelineSubStep struct {
-	Id string `yaml:"id,omitempty" json:"id"`
-
-	Run string `yaml:"run,omitempty" json:"run,omitempty"`
-
-	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
-
-	Plan []spec.Step `yaml:"plan,omitempty" json:"plan,omitempty"`
-
-	Charly []string `yaml:"charly,omitempty" json:"charly,omitempty"`
-
-	When string `yaml:"when,omitempty" json:"when,omitempty"`
-
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-
-	Cwd string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-
-	Stdin string `yaml:"stdin,omitempty" json:"stdin,omitempty"`
-
-	TimeoutMs int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-
-	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
-
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
-}
-
-// #PipelineInput — the lobster `input` gate. `response_schema` is a JSON Schema
-// document; the engine validates the resume response against it
-// (cuelang.org/go/encoding/jsonschema). The `.lobster` importer maps lobster's own
-// `responseSchema` spelling onto this charly snake_case key.
-type PipelineInput struct {
-	Prompt string `yaml:"prompt,omitempty" json:"prompt"`
-
-	ResponseSchema map[string]any `yaml:"response_schema,omitempty" json:"response_schema,omitempty"`
-
-	Defaults map[string]string `yaml:"defaults,omitempty" json:"defaults,omitempty"`
-}
-
-// #PipelineStepBase — one authored workflow step.
-type PipelineStepBase struct {
-	Id string `yaml:"id,omitempty" json:"id"`
-
-	When string `yaml:"when,omitempty" json:"when,omitempty"`
-
-	Env map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
-
-	Cwd string `yaml:"cwd,omitempty" json:"cwd,omitempty"`
-
-	Stdin string `yaml:"stdin,omitempty" json:"stdin,omitempty"`
-
-	TimeoutMs int64 `yaml:"timeout_ms,omitempty" json:"timeout_ms,omitempty"`
-
-	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
-
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
-
-	// approval — terse authored union; an engine normalizes it to #PipelineApproval.
-	Approval any `yaml:"approval,omitempty" json:"approval,omitempty"`
-
-	// --- lobster exec arms ---
-	Run string `yaml:"run,omitempty" json:"run,omitempty"`
-
-	Pipeline string `yaml:"pipeline,omitempty" json:"pipeline,omitempty"`
-
-	Workflow string `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-
-	// workflow_args — the sub-workflow invocation's RUNTIME arg values, so the SAME
-	// admission as `#WorkflowRunRequest.args` (`schema.#WorkflowArgVal`). The lowered step's
-	// `workflow_args` is the engine's own `{[string]: _}` (lobster.cue) and lands in the
-	// same `resolveWorkflowArgs(map[string]any)` the run request does, so a scalar-only
-	// spelling here would be a SECOND rule for one question — "what may a workflow arg
-	// value be" — and a lane that works at the top level would fail one step down.
-	WorkflowArgs map[string]any `yaml:"workflow_args,omitempty" json:"workflow_args,omitempty"`
-
-	Parallel PipelineParallel `yaml:"parallel,omitempty" json:"parallel,omitempty"`
-
-	ForEach string `yaml:"for_each,omitempty" json:"for_each,omitempty"`
-
-	Lanes string `yaml:"lanes,omitempty" json:"lanes,omitempty"`
-
-	Input PipelineInput `yaml:"input,omitempty" json:"input,omitempty"`
-
-	// --- for_each / lanes companions (meaningful only alongside for_each or lanes) ---
-	ItemVar string `yaml:"item_var,omitempty" json:"item_var,omitempty"`
-
-	IndexVar string `yaml:"index_var,omitempty" json:"index_var,omitempty"`
-
-	BatchSize int64 `yaml:"batch_size,omitempty" json:"batch_size,omitempty"`
-
-	PauseMs int64 `yaml:"pause_ms,omitempty" json:"pause_ms,omitempty"`
-
-	Steps []PipelineSubStep `yaml:"steps,omitempty" json:"steps,omitempty"`
-
-	// --- charly arms: the FULL charly grammar, any plugin of any class ---
-	Plan []spec.Step `yaml:"plan,omitempty" json:"plan,omitempty"`
-
-	Charly []string `yaml:"charly,omitempty" json:"charly,omitempty"`
-}
-
-// #PipelineStep — the step type `steps:` carries: the authored step, named so a step
-// consumer (this repo's workflowkit) has a stable type to build on without reaching for the
-// base def.
-type PipelineStep PipelineStepBase
-
 // #PipelineSchedule — the cron trigger. A 5-field cron, the SAME grammar
 // deploy.schedule, a k8s CronJob and GitHub Actions `on.schedule` use, so one
 // authored schedule lowers to every consumer; the lobster engine converts it to a
@@ -488,7 +281,9 @@ type Pipeline struct {
 
 	// engine — the workflow engine word, resolved against the `workflow` PROVIDER
 	// CLASS and dispatched as InvokeProvider("workflow", <engine>, workflow-run|…)
-	// through the normal path. Default "lobster".
+	// through the normal path. Default "lobster". (Whether the pipeline kind may keep
+	// a provider word at all is opencharly/plugin-pipeline#67's decision, not this
+	// schema's.)
 	Engine string `yaml:"engine,omitempty" json:"engine,omitempty"`
 
 	Args map[string]spec.TaskParamSpec `yaml:"args,omitempty" json:"args,omitempty"`
@@ -508,5 +303,9 @@ type Pipeline struct {
 
 	Entities map[string]map[string]any `yaml:"entities,omitempty" json:"entities,omitempty"`
 
-	Steps []PipelineStep `yaml:"steps,omitempty" json:"steps"`
+	// stage — the pipeline's stages, keyed by NAME. The map is unordered by
+	// construction, so the ONE order is the graph `after:` declares: the lowering
+	// orders the stages topologically (ties broken by name, so an emission is
+	// reproducible) and a cycle is a load error naming the stages in it.
+	Stage map[string]spec.Stage `yaml:"stage,omitempty" json:"stage"`
 }
