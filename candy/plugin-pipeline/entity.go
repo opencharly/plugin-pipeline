@@ -1,6 +1,7 @@
 package pluginpipeline
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/workflowkit"
+	"github.com/opencharly/sdk"
 	"github.com/opencharly/sdk/loaderkit"
 	specloader "github.com/opencharly/spec/loader"
 	"github.com/opencharly/spec/spec"
@@ -155,9 +157,9 @@ func walkNamedEntity(dir, name string, fn entityNodeFunc) error {
 
 // loadEntity resolves the named kind:pipeline entity from the project's documents
 // (root-wins) and returns its validated params.Pipeline body. The authored grammar
-// is `steps:` (params.Pipeline), validated by workflowkit.ValidatePipeline —
+// is `stage:` (params.Pipeline), validated by workflowkit.ValidatePipeline —
 // the SAME gate every engine runs before lowering.
-func loadEntity(name string) (params.Pipeline, error) {
+func loadEntity(name string, ex *sdk.Executor) (params.Pipeline, error) {
 	// The loader permits the SAME name under DIFFERENT kinds across separate documents
 	// (cross-file reuse), so a wrong-kind node must not shadow a pipeline entity in a
 	// later document — keep looking for the pipeline kind, and report wrong-kind only
@@ -175,7 +177,15 @@ func loadEntity(name string) (params.Pipeline, error) {
 			wrongKindPath = path
 			return false, nil // keep looking for a real pipeline entity
 		}
-		p, derr := decodePipelineInput(name, path, body)
+		// The registrar makes an authored `<word>: <scalar>` plugin-verb sugar
+		// desugarable (the scalar shorthand needs the verb's PRIMARY field). Without a
+		// host executor there is no registry to ask, so the empty registrar stands and a
+		// scalar sugar fails LOUDLY instead of being silently dropped.
+		threaded := spec.Threaded{}
+		if ex != nil {
+			threaded = loaderkit.LoaderThreadedViaExecutor(context.Background(), ex)
+		}
+		p, derr := decodePipelineInput(name, path, body, threaded)
 		if derr != nil {
 			return false, derr
 		}
@@ -203,8 +213,8 @@ func loadEntity(name string) (params.Pipeline, error) {
 // rewrite does not fail — yaml.v3 silently DROPS the unknown sugar key, so a
 // builtin-verb plan step lowers to an EMPTY step `- {}` and the workflow runs
 // nothing. Live-caught while authoring the R10 bed's mixed-grammar fixture.
-func decodePipelineInput(name, path string, body yaml.Node) (params.Pipeline, error) {
-	if err := desugarNestedPlans(name, "pipeline", &body); err != nil {
+func decodePipelineInput(name, path string, body yaml.Node, threaded spec.Threaded) (params.Pipeline, error) {
+	if err := desugarNestedPlans(name, "pipeline", &body, threaded); err != nil {
 		return params.Pipeline{}, fmt.Errorf("pipeline entity %q (%s): %w", name, path, err)
 	}
 	var p params.Pipeline
@@ -238,11 +248,11 @@ var memberKindSet = func() map[string]bool {
 //
 // The walk is kind-blind apart from the member-kind stop rule, and it stops at a
 // resource member exactly as the loader does, so the two never drift.
-func desugarNestedPlans(entity, path string, n *yaml.Node) error {
+func desugarNestedPlans(entity, path string, n *yaml.Node, threaded spec.Threaded) error {
 	switch n.Kind {
 	case yaml.SequenceNode:
 		for i, c := range n.Content {
-			if err := desugarNestedPlans(entity, fmt.Sprintf("%s[%d]", path, i), c); err != nil {
+			if err := desugarNestedPlans(entity, fmt.Sprintf("%s[%d]", path, i), c, threaded); err != nil {
 				return err
 			}
 		}
@@ -252,13 +262,18 @@ func desugarNestedPlans(entity, path string, n *yaml.Node) error {
 			if memberKindSet[k] {
 				continue
 			}
-			if k == "plan" && v.Kind == yaml.SequenceNode && len(v.Content) > 0 && v.Content[0].Kind == yaml.MappingNode {
-				if err := loaderkit.DesugarSteps(entity, v, spec.Threaded{}); err != nil {
-					return fmt.Errorf("%s.plan: %w", path, err)
+			// A step list is a plan: `plan:` in an inline entity, and `step:` inside a
+			// stage (`#StageStep.step`, the contract's arm). Both are the SAME #Step
+			// grammar, so both take the loader's own desugar — skipping either one leaves
+			// authored `<word>: <input>` sugar to be silently DROPPED by yaml.v3, which
+			// lowers an empty step and runs nothing.
+			if (k == "plan" || k == "step") && v.Kind == yaml.SequenceNode && len(v.Content) > 0 && v.Content[0].Kind == yaml.MappingNode {
+				if err := loaderkit.DesugarSteps(entity, v, threaded); err != nil {
+					return fmt.Errorf("%s.%s: %w", path, k, err)
 				}
 				continue
 			}
-			if err := desugarNestedPlans(entity, path+"."+k, v); err != nil {
+			if err := desugarNestedPlans(entity, path+"."+k, v, threaded); err != nil {
 				return err
 			}
 		}

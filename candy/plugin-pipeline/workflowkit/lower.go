@@ -3,13 +3,14 @@ package workflowkit
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/opencharly/plugin-pipeline/candy/plugin-pipeline/params"
 	"github.com/opencharly/sdk/deploykit"
 	"github.com/opencharly/sdk/kit"
 	sdkworkflowkit "github.com/opencharly/sdk/workflowkit"
-	"github.com/opencharly/spec/shellquote"
 	"github.com/opencharly/spec/spec"
 	"gopkg.in/yaml.v3"
 )
@@ -29,26 +30,41 @@ import (
 // lobsterDrop are the pipeline-level keys owned by the ENGINE, never by the lobster IR:
 // `engine` selects the engine itself; `triggers` become a systemd timer (see
 // deploykit.GenerateSystemdTimer); `config` is engine config; `entities` are inline
-// charly nodes, which belong in the generated charly.yml; `concurrency` is an engine
-// scheduling hint.
+// charly nodes, which belong in the generated charly.yml; `stage` is the AUTHORING
+// surface the lowering consumes (the engine runs `steps:`, which this file emits);
+// `concurrency` is an engine scheduling hint.
 var lobsterDrop = map[string]bool{
 	"concurrency": true,
 	"config":      true,
 	"entities":    true,
 	"triggers":    true,
 	"engine":      true,
+	"stage":       true,
 }
 
 // Lower lowers an authored pipeline into its (lobsterYAML, charlyYAML) pair. It validates
 // first, so a lowering never emits a half-valid pair.
 //
+// THE TWO STEPS THAT MAKE A STAGE BODY AN ENGINE FILE:
+//
+//  1. StageOrder (stage.go) linearises the `stage:` map by the graph `after:` declares —
+//     that is D-FLOW-1's ordering, and it is the WHOLE reason a roster no longer needs a
+//     kind of its own (charly#1168). A cycle stops the lowering here, naming the stages.
+//  2. lowerStage turns ONE stage into ONE lobster step: the arm decides what the engine
+//     runs, and the scheduling fields become the engine's own words.
+//
 // The workflow name is the generation directory's basename; every generated charly task is
-// named `_pipeline-<name>-<id>`.
+// named `_pipeline-<name>-<stage>`.
 func Lower(p *params.Pipeline, projectDir, genDir, charlyBin string) ([]byte, []byte, error) {
 	if err := ValidatePipeline(p); err != nil {
 		return nil, nil, err
 	}
 	name := filepath.Base(filepath.Clean(genDir))
+
+	order, err := StageOrder(p.Stage)
+	if err != nil {
+		return nil, nil, fmt.Errorf("lowering %s: %w", name, err)
+	}
 
 	body, err := marshalNode(p)
 	if err != nil {
@@ -57,23 +73,21 @@ func Lower(p *params.Pipeline, projectDir, genDir, charlyBin string) ([]byte, []
 
 	gen := &lowerCtx{name: name, genDir: genDir, charlyBin: charlyBin}
 	lobsterSteps := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
-	if steps := kit.MappingChild(body, "steps"); steps != nil && steps.Kind == yaml.SequenceNode {
-		for i, st := range steps.Content {
-			out, lerr := gen.lowerStep(st, fmt.Sprintf("steps[%d]", i))
-			if lerr != nil {
-				return nil, nil, lerr
-			}
-			lobsterSteps.Content = append(lobsterSteps.Content, out)
+	for _, stageName := range order {
+		out, lerr := gen.lowerStage(stageName, p.Stage[stageName])
+		if lerr != nil {
+			return nil, nil, fmt.Errorf("lowering %s: stage %q: %w", name, stageName, lerr)
 		}
+		lobsterSteps.Content = append(lobsterSteps.Content, out)
 	}
 
 	// the .lobster workflow: `name` first, then every lobster-native pipeline key (the
-	// engine-owned ones dropped), then the lowered steps.
+	// authoring-only ones dropped), then the lowered steps.
 	flow := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	setKey(flow, "name", scalarNode(name))
 	for i := 0; i+1 < len(body.Content); i += 2 {
 		k := body.Content[i].Value
-		if lobsterDrop[k] || k == "steps" {
+		if lobsterDrop[k] {
 			continue
 		}
 		flow.Content = append(flow.Content, body.Content[i], body.Content[i+1])
@@ -121,7 +135,7 @@ so pointing it at a DIRECTORY (e.g. ` + "`../../..`" + `) silently fails to load
 the ONE form that works for a flat import.`
 
 // lowerCtx carries the lowering state: where we generate, which charly binary to bake in,
-// and the generated charly tasks collected while walking the steps.
+// and the generated charly tasks collected while walking the stages.
 type lowerCtx struct {
 	name      string
 	genDir    string
@@ -129,242 +143,278 @@ type lowerCtx struct {
 	tasks     []generatedTask
 }
 
-// generatedTask is one `_pipeline-<name>-<id>:` entry of the generated charly.yml.
+// generatedTask is one `_pipeline-<name>-<stage>:` entry of the generated charly.yml.
 type generatedTask struct {
 	name string
 	node *yaml.Node
 }
 
-// mapLobsterInputKey renames the input gate's schema key to the spelling the LOBSTER file
-// uses. It is the ONE key whose spelling differs between the authored pipeline and the
-// lobster file: the authoring def spells it `response_schema` (this repo's
-// schema/pipeline.cue #PipelineInput, whose Go field carries `yaml:"response_schema"`),
-// while the lobster file — and every lobster consumer, upstream's loader included — spells
-// it `responseSchema` (plugin-lobster's #LobsterInput). The engine's loader REQUIRES the
-// key: a step whose `input` object lacks `responseSchema` is rejected at load. Emitted with
-// the authoring spelling, an input gate would never reach the engine at all.
+// lobsterOnError maps the AUTHORED failure policy onto the ENGINE's enum. The authored
+// words are the contract's (`fail` | `continue`); the engine's are `stop` | `continue` |
+// `skip_rest`. Nothing else translates them, and an untranslated `fail` reaches an engine
+// that does not know it and silently behaves as `continue` (opencharly/plugin-pipeline#38
+// — measured, and why this mapper exists rather than a pass-through).
+func lobsterOnError(word string) string {
+	if word == "fail" {
+		return "stop"
+	}
+	return word
+}
+
+// durationMS converts a CUE #Duration ("2s", "1m30s", "500ms") to the engine's
+// millisecond integer. The validator has already parsed every duration on the stage, so a
+// failure here cannot happen on a validated body; it returns 0 rather than guessing.
+func durationMS(d string) int64 {
+	dur, err := time.ParseDuration(d)
+	if err != nil {
+		return 0
+	}
+	return int64(dur / time.Millisecond)
+}
+
+// lowerStage lowers ONE stage into ONE lobster step node.
 //
-// This comment used to end "Every other step key already agrees between the two spellings, so this is
-// the whole of the translation." That was an assumption stated as a fact, and it was false twice over
-// (opencharly/plugin-pipeline#38) - see mapLobsterVocabulary.
-func mapLobsterInputKey(st *yaml.Node) {
-	in := kit.MappingChild(st, "input")
-	if in == nil || in.Kind != yaml.MappingNode {
-		return
+// The arm decides the body; the scheduling fields become the engine's own keys. `after:`
+// emits NOTHING: it was already consumed by StageOrder, and the emitted step ORDER is the
+// ordering (the engine has no `after:` word — a DAG edge IS list position there).
+func (c *lowerCtx) lowerStage(name string, st spec.Stage) (*yaml.Node, error) {
+	arm, err := stageArm(st)
+	if err != nil {
+		return nil, err
 	}
-	for i := 0; i+1 < len(in.Content); i += 2 {
-		if in.Content[i].Value == "response_schema" {
-			in.Content[i].Value = "responseSchema"
-			return
+	out := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	setKey(out, "id", scalarNode(name))
+
+	// --- scheduling, in the engine's vocabulary ---
+	if oe := stageOnError(st); oe != "" {
+		setKey(out, "on_error", scalarNode(lobsterOnError(oe)))
+	}
+	if st.Timeout != "" {
+		setKey(out, "timeout_ms", intNode(durationMS(st.Timeout)))
+	}
+	if st.Retry.Attempt != 0 || st.Retry.Until != "" || st.Retry.Interval != "" {
+		retry, rerr := lowerRetry(st)
+		if rerr != nil {
+			return nil, rerr
 		}
-	}
-}
-
-// mapLobsterVocabulary rewrites the step keys whose AUTHORED spelling differs from the engine's, and
-// materialises the defaults the authored schema declares but the engine's enum does not.
-//
-// Two words, one contract (opencharly/plugin-pipeline#38). The authored schema offers
-// `on_error: "fail" | "continue" | "skip_rest"`; the engine's enum accepts `"stop" | "continue" |
-// "skip_rest"`. Nothing at this boundary translated the first, so `on_error: fail` - a word the schema
-// explicitly offers - reached an engine that does not know it and silently behaved as `continue`. And
-// `#PipelineParallel` declares `wait?: *"all" | "any"`, a DEFAULT, while the engine's enum declares none:
-// an unauthored `wait:` arrived as an empty string against an enum with no default.
-//
-// Both are one defect: the boundary carried no vocabulary discipline, and one instance was visible while
-// the other was not.
-func mapLobsterVocabulary(st *yaml.Node) {
-	mapLobsterInputKey(st)
-	renameStepScalar(st, "on_error", "fail", "stop")
-	if par := kit.MappingChild(st, "parallel"); par != nil {
-		defaultStepScalar(par, "wait", "all")
-	}
-}
-
-// renameStepScalar rewrites key's value from `from` to `to` when it holds exactly that word, and reports
-// whether it did. Any other value is left ALONE rather than guessed at: the engine's own loader is the
-// authority on whether a word is one it knows.
-func renameStepScalar(st *yaml.Node, key, from, to string) bool {
-	v := kit.MappingChild(st, key)
-	if v == nil || v.Kind != yaml.ScalarNode || v.Value != from {
-		return false
-	}
-	v.Value = to
-	return true
-}
-
-// defaultStepScalar materialises key: value when the key is ABSENT. An authored value - including one
-// this function does not recognise - is never overwritten.
-func defaultStepScalar(st *yaml.Node, key, value string) {
-	if st == nil || st.Kind != yaml.MappingNode || kit.MappingChild(st, key) != nil {
-		return
-	}
-	st.Content = append(st.Content, scalarNode(key), scalarNode(value))
-}
-
-// lowerStep lowers ONE step (or sub-step / parallel branch) in place and returns it. A
-// `plan:` step becomes a `run:` that calls the generated charly task with `--output` and
-// the step's lobstered references passed as `-p REF_n="$REF_n"`; a `charly:` step becomes a
-// `run:` that calls charly with the shell-quoted argv. Every lobster-native key passes
-// through untouched.
-func (c *lowerCtx) lowerStep(st *yaml.Node, path string) (*yaml.Node, error) {
-	if st == nil || st.Kind != yaml.MappingNode {
-		return st, nil
-	}
-	mapLobsterVocabulary(st)
-
-	// recurse into the nested step lists FIRST, so a branch's own plan:/charly: lowers too.
-	if par := kit.MappingChild(st, "parallel"); par != nil {
-		if br := kit.MappingChild(par, "branches"); br != nil && br.Kind == yaml.SequenceNode {
-			for i, b := range br.Content {
-				out, err := c.lowerStep(b, fmt.Sprintf("%s.parallel.branches[%d]", path, i))
-				if err != nil {
-					return nil, err
-				}
-				br.Content[i] = out
-			}
-		}
-	}
-	if subs := kit.MappingChild(st, "steps"); subs != nil && subs.Kind == yaml.SequenceNode {
-		for i, b := range subs.Content {
-			out, err := c.lowerStep(b, fmt.Sprintf("%s.steps[%d]", path, i))
-			if err != nil {
-				return nil, err
-			}
-			subs.Content[i] = out
-		}
+		setKey(out, "retry", retry)
 	}
 
-	id := ""
-	if v := kit.MappingChild(st, "id"); v != nil {
-		id = v.Value
+	// --- what this unit cannot express, refused rather than dropped ---
+	//
+	// `when:` is a MATCHER PER PARAMETER (D-FLOW-1), and the engine evaluates its
+	// `when:` as an expression over STEP RESULTS. No projection between the two exists
+	// anywhere in the tree, and inventing one here (stringifying values into an
+	// expression) would be a second, silent rule. The validator accepts the field
+	// because it is schema-legal and DESIGN-owned; the LOWERING refuses it because the
+	// engine has no word for it yet. D-FLOW-1's condition half is the open item this
+	// refusal names.
+	if len(st.When) > 0 {
+		return nil, fmt.Errorf("when: has no engine projection — a stage condition is a matcher per parameter (D-FLOW-1) and the engine's `when:` is an expression over step results; nothing in the tree translates the two")
 	}
-	pruneEmptyMappings(st)
+	if stageConcurrency(st) > 1 && !laneSet(st) && arm != armDeployment {
+		return nil, fmt.Errorf("concurrency: %d on a %q stage with no lane: — the pool applies to lanes or deployments (D-FLOW-1)", stageConcurrency(st), arm)
+	}
 
-	if plan := kit.MappingChild(st, "plan"); plan != nil && plan.Kind == yaml.SequenceNode {
-		planCopy, err := cloneNode(plan)
+	// --- the arm ---
+	switch arm {
+	case armStep:
+		plan, err := c.taskPlanForSteps(st)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, err
 		}
-		// emit the AUTHORED sugar, not the internal plugin/plugin_input pair the loader
-		// desugared this plan into (the generated file is re-loaded by the loader).
-		deploykit.ResugarPlan(planCopy, nil)
-		refs := sdkworkflowkit.PlanRefs(planCopy)
-		entity := c.addTask(id, planCopy)
+		if laneSet(st) {
+			return c.lowerLane(name, st, plan, out)
+		}
+		body, err := c.lowerTaskArm(name, plan, out)
+		if err != nil {
+			return nil, err
+		}
+		return body, nil
 
-		argv := []string{c.charlyBin, "-C", c.genDir, "task", entity, "--output"}
-		if len(refs) > 0 {
-			env := ensureMapping(st, "env")
-			for i, r := range refs {
-				varName := fmt.Sprintf("REF_%d", i+1)
-				// lobster resolves the ref into the step's env; the `-p` passes it on to
-				// the charly task, where ${REF_n} expands it (see workflowkit.ExpandVars).
-				setKey(env, varName, scalarNode(r))
-				argv = append(argv, "-p", varName+`="$`+varName+`"`)
-			}
-		}
-		sdkworkflowkit.RewritePlanRefs(planCopy, refs)
-		carryStepRedo(st, planCopy)
-		deleteKey(st, "plan")
-		setKey(st, "run", scalarNode(strings.Join(argv, " ")))
-		pruneEmptyMappings(st)
-		return st, nil
-	}
+	case armPipeline:
+		// The engine's own sub-workflow arm: the ref passes through untouched (the
+		// engine resolves it against its own workflow set).
+		setKey(out, "pipeline", scalarNode(string(st.Pipeline.Pipeline)))
+		return out, nil
 
-	if ch := kit.MappingChild(st, "charly"); ch != nil && ch.Kind == yaml.SequenceNode {
-		parts := []string{c.charlyBin, "-C", c.genDir}
-		for _, a := range ch.Content {
-			parts = append(parts, shellquote.ShellQuote(a.Value))
+	case armDeployment:
+		plan, err := c.taskPlanForDeployments(st)
+		if err != nil {
+			return nil, err
 		}
-		deleteKey(st, "charly")
-		setKey(st, "run", scalarNode(strings.Join(parts, " ")))
+		if laneSet(st) {
+			return nil, fmt.Errorf("lane: over %q with a deployment: list — a literal ref list has no item to iterate; write the lane over a parameter and name the ref as `charly check run \"$LANE_ITEM\"` in a step: (DESIGN.md:1336)", st.Lane.Over)
+		}
+		if stageConcurrency(st) > 1 {
+			return nil, fmt.Errorf("concurrency: %d with a deployment: list — the engine pools a COLLECTION, and a literal ref list is not one; use lane: over a parameter (DESIGN.md:3014)", stageConcurrency(st))
+		}
+		return c.lowerTaskArm(name, plan, out)
+
+	case armAsk:
+		return c.lowerAsk(name, st, out)
 	}
-	return st, nil
+	return nil, fmt.Errorf("unknown arm %q", arm)
 }
 
-// addTask registers a generated charly task for a lowered `plan:` step and returns its
-// entity name.
-func (c *lowerCtx) addTask(id string, plan *yaml.Node) string {
-	name := fmt.Sprintf("_pipeline-%s-%s", c.name, entityIDSafe(id))
+// laneSet reports whether the stage iterates a parameter's list.
+func laneSet(st spec.Stage) bool { return st.Lane.Over != "" }
+
+// lowerTaskArm attaches a generated charly task to the stage's lobster step: the step's
+// `run:` invokes `charly task <entity>` in the generation dir, with `--output` so the
+// task's structured outcome reaches the engine, and one `-p REF_n` per plan reference
+// the task carries (the plan is rewritten to read REF_n, see ExpandVars).
+func (c *lowerCtx) lowerTaskArm(stage string, plan *yaml.Node, out *yaml.Node) (*yaml.Node, error) {
+	refs := sdkworkflowkit.PlanRefs(plan)
+	entity := c.addTask(stage, plan)
+	argv := []string{c.charlyBin, "-C", c.genDir, "task", entity, "--output"}
+	if len(refs) > 0 {
+		// The plan is rewritten to read REF_n; the ENGINE resolves each ref into the
+		// step's env, and `-p REF_n="$REF_n"` passes it on to the charly task.
+		env := ensureMapping(out, "env")
+		for i, r := range refs {
+			varName := fmt.Sprintf("REF_%d", i+1)
+			setKey(env, varName, scalarNode(r))
+			argv = append(argv, "-p", varName+`="$`+varName+`"`)
+		}
+	}
+	sdkworkflowkit.RewritePlanRefs(plan, refs)
+	setKey(out, "run", scalarNode(strings.Join(argv, " ")))
+	pruneEmptyMappings(out)
+	return out, nil
+}
+
+// lowerLane lowers a stage that runs once per item of a parameter's list. The engine's
+// mechanism is `lanes:` (a concurrent pool) with `batch_size` as the pool width and
+// `item_var` as the name the item reaches the body under.
+//
+// THE ITEM NAME IS `LANE_ITEM`, the contract's (DESIGN.md:3014: "the step reads its item
+// as `LANE_ITEM`; there is no pause between batches, no index variable and no configurable
+// name"). The old author-chosen `item_var`/`index_var`/`pause_ms`/`batch_size` companions
+// are DELETED with the lobster step grammar they belonged to.
+//
+// The item reaches the charly task through the process environment: the engine exports
+// the item var to the sub-step's shell, `charly task` inherits it, and the plan step's
+// `command:` shell inherits it too — which is what makes an authored `$LANE_ITEM` in a
+// plan command resolve.
+func (c *lowerCtx) lowerLane(stage string, st spec.Stage, plan *yaml.Node, out *yaml.Node) (*yaml.Node, error) {
+	body, err := c.lowerTaskArm(stage, plan, &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"})
+	if err != nil {
+		return nil, err
+	}
+	// The task arm built its own `run:`/`env:`; move them onto the lane's sub-step.
+	sub := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	setKey(sub, "id", scalarNode(stage))
+	if run := kit.MappingChild(body, "run"); run != nil {
+		setKey(sub, "run", run)
+	}
+	if env := kit.MappingChild(body, "env"); env != nil {
+		setKey(sub, "env", env)
+	}
+
+	setKey(out, "lanes", scalarNode("${"+st.Lane.Over+"}"))
+	setKey(out, "item_var", scalarNode("LANE_ITEM"))
+	setKey(out, "batch_size", intNode(stageConcurrency(st)))
+	setKey(out, "steps", &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{sub}})
+	return out, nil
+}
+
+// lowerRetry translates the contract's #Retry onto the engine's retry object.
+//
+//   - `attempt`  -> `max`      (the engine's bounded count; same question)
+//   - `interval` -> `delay_ms` (the engine's fixed backoff base)
+//   - `until`    -> REFUSED. The engine has no total-duration bound (its retry takes
+//     `max`, `backoff`, `delay_ms`, `max_delay_ms`, `jitter`), and inventing one by
+//     dividing `until` by `interval` would be a second, silent rule. D-FLOW-2 is the
+//     row that owns the outcome.
+func lowerRetry(st spec.Stage) (*yaml.Node, error) {
+	n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+	if st.Retry.Attempt != 0 {
+		setKey(n, "max", intNode(int64(st.Retry.Attempt)))
+	}
+	setKey(n, "delay_ms", intNode(durationMS(stageInterval(st))))
+	if st.Retry.Until != "" {
+		return nil, fmt.Errorf("retry.until: %q has no engine field — the engine's retry is bounded by `max`, `backoff`, `delay_ms`, `max_delay_ms` and `jitter`, never by total duration (D-FLOW-2 owns the outcome)", st.Retry.Until)
+	}
+	return n, nil
+}
+
+// lowerAsk lowers an ask stage onto the engine's APPROVAL gate.
+//
+// WHY THE APPROVAL GATE AND NOT THE INPUT GATE: D-FLOW-3's ask settles on one of
+// `_answer`'s outcome words — `granted`, `refused`, `cancelled` — and those are approvals,
+// not free-form responses. The engine has both gates, but its input gate is answered with a
+// JSON document validated by a JSON SCHEMA, while the contract's answer channel carries a
+// MATCHER (`#Answer.expect: #Matcher`); a matcher is one comparison, not a schema, so an
+// input gate has no authored home in this model. The approval gate carries the prompt as its
+// message, and `charly pipeline resume <name> --approve yes|no` is the answer path that
+// already exists (this plugin's own cli.go resume leg, exercised by the R10 witness).
+//
+// WHAT IS REFUSED, and reported rather than invented:
+//   - `answer.expect` — a matcher has no approval-gate projection, and no JSON-Schema one
+//     either (see above). D-FLOW-3 owns the outcome; the engine needs a word for it first.
+//   - `answer.unanswered` other than the schema's default `refused` — the gate has no
+//     outcome field. A `refused` default is NOT emitted: it is the engine's deny path, which
+//     the resume leg already expresses.
+func (c *lowerCtx) lowerAsk(stage string, st spec.Stage, out *yaml.Node) (*yaml.Node, error) {
+	if st.Ask.Answer.Expect.Op != "" || st.Ask.Answer.Expect.Value != nil {
+		return nil, fmt.Errorf("ask.answer.expect: has no engine projection — the engine's approval gate carries a prompt and two answers (`--approve yes|no`), while `expect:` is a MATCHER (D-FLOW-3); a response contract has no gate in this engine")
+	}
+	if u := stageUnanswered(st); u != "refused" {
+		return nil, fmt.Errorf("ask.answer.unanswered: %q has no engine word — the approval gate has no outcome field, so only the default `refused` is expressible (D-FLOW-3 owns the outcome words)", u)
+	}
+	// The engine's terse string form: `approval: "<message>"` is normalized to its object
+	// form by the engine's own loader.
+	setKey(out, "approval", scalarNode(string(st.Ask.Prompt)))
+	return out, nil
+}
+
+// taskPlanForSteps wraps a stage's `step:` arm into the one-element plan list the charly
+// task carries.
+func (c *lowerCtx) taskPlanForSteps(st spec.Stage) (*yaml.Node, error) {
+	return planNode(st.Step.Step)
+}
+
+// taskPlanForDeployments turns a `deployment:` arm into the plan that realizes each named
+// deployment and runs its checks — `charly check run <ref>` per ref, the idiom DESIGN.md
+// uses in its own examples (`charly check run hello-pod`, DESIGN.md:2470).
+func (c *lowerCtx) taskPlanForDeployments(st spec.Stage) (*yaml.Node, error) {
+	steps := make([]spec.Step, 0, len(st.Deployment.Deployment))
+	for _, ref := range st.Deployment.Deployment {
+		steps = append(steps, spec.Step{
+			Check: fmt.Sprintf("the deployment %s passes its checks", ref),
+			Op:    spec.Op{Command: c.charlyBin + " check run " + string(ref)},
+		})
+	}
+	return planNode(steps)
+}
+
+// planNode marshals a step list into the YAML node the generated task carries.
+func planNode(steps []spec.Step) (*yaml.Node, error) {
+	if len(steps) == 0 {
+		return nil, fmt.Errorf("the arm carries no steps")
+	}
+	n, err := marshalNode(steps)
+	if err != nil {
+		return nil, err
+	}
+	// Emit the AUTHORED sugar, not the internal plugin/plugin_input pair the loader
+	// desugared the plan into (the generated file is re-loaded by the loader).
+	deploykit.ResugarPlan(n, nil)
+	return n, nil
+}
+
+// addTask registers a generated charly task for a lowered stage and returns its entity
+// name.
+func (c *lowerCtx) addTask(stage string, plan *yaml.Node) string {
+	name := fmt.Sprintf("_pipeline-%s-%s", c.name, entityIDSafe(stage))
 	taskBody := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
-	setKey(taskBody, "description", scalarNode(fmt.Sprintf("lowered from pipeline step %s/%s", c.name, id)))
+	setKey(taskBody, "description", scalarNode(fmt.Sprintf("lowered from pipeline stage %s/%s", c.name, stage)))
 	setKey(taskBody, "plan", plan)
 	root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
 	setKey(root, "task", taskBody)
 	c.tasks = append(c.tasks, generatedTask{name: name, node: root})
 	return name
-}
-
-// carryStepRedo COPIES a lowered plan's `redo` spec onto the lobster step as a
-// charly-only key. The spec must reach BOTH halves: the VERB still reads `redo.on_fail`
-// to choose the trigger it emits, while the ENGINE reads `triggers`/`max`/`escalate_after`
-// off the STEP — and `plan:` is deleted from the lobster step at lowering, so the engine
-// would otherwise see nothing to rewind on. The plan is a one-element `!!seq`; its element's
-// verb body — the mapping that carries the `redo` child — is located by KEY (verbBody), not
-// by position. The node is CLONED (never inserted twice), GUARDED (an already-present step
-// redo wins; a second Lower must not duplicate) and DEFENSIVE (any shape mismatch, or no
-// `redo` child, emits NOTHING — never an empty `redo:`, which would be noise and a behaviour
-// change).
-func carryStepRedo(st, plan *yaml.Node) {
-	if kit.MappingChild(st, "redo") != nil {
-		return
-	}
-	if plan == nil || plan.Kind != yaml.SequenceNode || len(plan.Content) != 1 {
-		return
-	}
-	body := verbBody(plan.Content[0])
-	if body == nil {
-		return
-	}
-	redoSpec := kit.MappingChild(body, "redo")
-	if redoSpec == nil {
-		return
-	}
-	cp, err := cloneNode(redoSpec)
-	if err != nil || cp == nil {
-		return
-	}
-	setKey(st, "redo", cp)
-}
-
-// stepIntentKeys are the plan-element keys that carry the step's INTENT DESCRIPTION (a
-// scalar) rather than a verb body — derived from spec's own exported discriminator
-// constants so the vocabulary is never duplicated here.
-var stepIntentKeys = map[string]bool{
-	string(spec.KwRun):        true,
-	string(spec.KwCheck):      true,
-	string(spec.KwAgentRun):   true,
-	string(spec.KwAgentCheck): true,
-	string(spec.KwInclude):    true,
-}
-
-// verbBody returns a lowered plan element's VERB BODY — the mapping that carries the step's
-// verb input, and with it any `redo:` spec — or nil when the element has none.
-//
-// It must be found by KEY, never by position. A plan element marshals in one of two shapes:
-//
-//	{<verbKey>: <verbBody>}                       — a plan step with no description
-//	{run: <description>, <verbKey>: <verbBody>}   — … and with one
-//
-// The second shape is the ordinary authored one (spec.Step marshals its intent keyword
-// BEFORE the inline Op, so a described step emits `run:` first), and there Content[1] is the
-// `run` SCALAR — so a positional lookup finds a non-mapping, returns early, and silently
-// drops the redo: exactly the engine-invisible failure this helper exists to prevent. Every
-// intent keyword is skipped; the first remaining pair whose value is a MAPPING is the verb
-// body (a verb's input is an object — the scalar shorthand belongs to a single-primary input,
-// which cannot carry a `redo` child at all).
-func verbBody(el *yaml.Node) *yaml.Node {
-	if el == nil || el.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(el.Content); i += 2 {
-		if stepIntentKeys[el.Content[i].Value] {
-			continue
-		}
-		if v := el.Content[i+1]; v.Kind == yaml.MappingNode {
-			return v
-		}
-	}
-	return nil
 }
 
 // entityIDSafe makes a step id safe as a charly entity name.
@@ -401,26 +451,20 @@ func pruneEmptyMappings(st *yaml.Node) {
 
 // --- small yaml.Node helpers (the ones kit does not already own) ---
 
+// intNode emits a NUMBER, never a quoted string: the engine's timeout_ms / retry.max /
+// retry.delay_ms / batch_size are Go ints, and a `!!str` node makes its loader refuse the
+// workflow ("cannot unmarshal string into int") — the emitted artifact is what the engine
+// reads, so its TYPE is part of the lowering's contract, not a formatting detail.
+func intNode(n int64) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.FormatInt(n, 10)}
+}
+
 func scalarNode(s string) *yaml.Node {
 	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s}
 }
 
 func setKey(m *yaml.Node, key string, val *yaml.Node) {
 	kit.SetMappingKey(m, key, val)
-}
-
-func deleteKey(m *yaml.Node, key string) {
-	if m == nil || m.Kind != yaml.MappingNode {
-		return
-	}
-	out := make([]*yaml.Node, 0, len(m.Content))
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if m.Content[i].Value == key {
-			continue
-		}
-		out = append(out, m.Content[i], m.Content[i+1])
-	}
-	m.Content = out
 }
 
 func ensureMapping(m *yaml.Node, key string) *yaml.Node {
@@ -445,19 +489,4 @@ func marshalNode(v any) (*yaml.Node, error) {
 		return n.Content[0], nil
 	}
 	return &n, nil
-}
-
-func cloneNode(n *yaml.Node) (*yaml.Node, error) {
-	b, err := yaml.Marshal(n)
-	if err != nil {
-		return nil, err
-	}
-	var out yaml.Node
-	if err := yaml.Unmarshal(b, &out); err != nil {
-		return nil, err
-	}
-	if out.Kind == yaml.DocumentNode && len(out.Content) == 1 {
-		return out.Content[0], nil
-	}
-	return &out, nil
 }

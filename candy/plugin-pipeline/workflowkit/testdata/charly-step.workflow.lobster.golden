@@ -1,8 +1,6 @@
-name: ci
-description: charly-arm fixture
+name: charly-step
+description: charly-step fixture
 steps:
-    - id: build
-      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/ci 'box' 'build' 'my box'
-    - id: after
-      when: $build.exit_code == 0
-      run: "true"
+    - id: only
+      on_error: stop
+      run: /usr/local/bin/charly -C /proj/.opencharly/pipelines/charly-step task _pipeline-charly-step-only --output

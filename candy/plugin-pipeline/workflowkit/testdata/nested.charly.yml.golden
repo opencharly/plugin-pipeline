@@ -8,10 +8,21 @@
 # the ONE form that works for a flat import.
 import:
     - ../../../charly.yml
-_pipeline-fan-b1:
+_pipeline-nested-zulu:
     task:
-        description: lowered from pipeline step fan/b1
+        description: lowered from pipeline stage nested/zulu
         plan:
-            - run: branch one
-              task:
-                task: one
+            - run: first
+              command: echo zulu
+_pipeline-nested-middle:
+    task:
+        description: lowered from pipeline stage nested/middle
+        plan:
+            - run: second
+              command: echo middle
+_pipeline-nested-alpha:
+    task:
+        description: lowered from pipeline stage nested/alpha
+        plan:
+            - run: last
+              command: echo alpha

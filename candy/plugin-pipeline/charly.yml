@@ -2,7 +2,7 @@ plugin-pipeline:
     candy:
         description: |-
             The workflow front-end — domain-neutral: resolve + validate a declared
-            kind:pipeline entity (`#Pipeline`, `steps:` — declared HERE, on this
+            kind:pipeline entity (`#Pipeline`, `stage:` — declared HERE, on this
             plugin's kind capability), lower it with this repo's workflowkit to the
             (workflow.lobster, charly.yml) pair, and dispatch
             the pair to the `workflow` provider class as workflow-run. Also the bare

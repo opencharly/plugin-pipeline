@@ -21,32 +21,45 @@ import (
 //
 // The engine-side half (executing the lowered pair) is plugin-lobster's R10.
 
-// mixedGrammarPlan mixes all three authored grammars in ONE pipeline: a lobster shell
-// arm (`run:`, executed by the engine), a flow key (`when:`), and a single-step
-// builtin-verb plan step — `plan:` with one step, the intent keyword carrying the
-// description and a `<word>: <input>` sugar key selecting the plugin verb (the loader's
-// documented step grammar; `gate` is this candy's own `verb:gate`).
+// mixedGrammarPlan mixes the stage body's two authored halves in ONE pipeline: a `step:`
+// arm whose plan carries a builtin-verb sugar (`gate`, this candy's own `verb:gate`) and a
+// second stage ordered by `after:` — the graph key that replaced the lobster flow key.
+//
+// P26 UNIT 2 RESHAPED IT: the fixture used to mix a lobster shell arm (`run:`), a flow key
+// (`when:`) and a `plan:` step. None of those three is authored any more — the step arm IS
+// the plan, `after:` IS the flow key, and the shell command is a `command:` verb (whose
+// MAP form is used here because a unit test's load has no host registrar to resolve the
+// scalar shorthand's primary field against).
 const mixedGrammarPlan = `mixed-plan:
   pipeline:
-    description: a mixed-grammar plan (lobster shell arm + single-step verb sugar + a flow key)
-    steps:
-      - id: build
-        run: "true"
-      - id: verify
-        when: $build.exit_code == 0
-        plan:
-          - run: grade the build result
-            gate:
-              condition: "true"
+    description: a stage body (verb sugar + ordering edge)
+    stage:
+      build:
+        step:
+          step:
+            - run: build it
+              command:
+                command: "true"
+      verify:
+        after: [build]
+        step:
+          step:
+            - run: grade the build result
+              gate:
+                condition: "true"
 `
 
 const brokenPlan = `broken-plan:
   pipeline:
-    description: two execution arms on one step
-    steps:
-      - id: s
-        run: "true"
-        pipeline: other
+    description: two arms on one stage
+    stage:
+      s:
+        step:
+          step:
+            - run: x
+              mkdir: /tmp/x
+        pipeline:
+          pipeline: other
 `
 
 func writeProject(t *testing.T, body string) string {
@@ -59,8 +72,8 @@ func writeProject(t *testing.T, body string) string {
 	return dir
 }
 
-// TestCLIValidate_AcceptsMixedGrammar: the new grammar is params.Pipeline (`steps:`),
-// and a step may carry either a lobster arm (`run:`) or a builtin-verb plan step.
+// TestCLIValidate_AcceptsMixedGrammar: the authored grammar is `stage:`, and a stage
+// carries ONE arm — here a `step:` plan with a builtin-verb sugar, plus an `after:` edge.
 func TestCLIValidate_AcceptsMixedGrammar(t *testing.T) {
 	writeProject(t, mixedGrammarPlan)
 	code, err := runCLI([]string{"validate", "mixed-plan"}, nil)
@@ -78,7 +91,7 @@ func TestCLIValidate_RejectsTwoArms(t *testing.T) {
 	if err == nil || code == 0 {
 		t.Fatalf("a two-arm step must be rejected: code=%d err=%v", code, err)
 	}
-	if !strings.Contains(err.Error(), "execution arms set") {
+	if !strings.Contains(err.Error(), "exactly one of step, pipeline, deployment, ask") {
 		t.Fatalf("the rejection must name the exec-arm XOR, got: %v", err)
 	}
 }

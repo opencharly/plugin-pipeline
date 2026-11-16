@@ -17,7 +17,7 @@ lifted stage verbs.
 |---|---|
 | `command:pipeline` | `charly pipeline run <entity>` and `charly pipeline agent` |
 | `verb:pipeline` | deterministic probe verbs |
-| `kind:pipeline` | the `kind: pipeline` entity (`steps:`), declared by this plugin (`#Pipeline`/`#PipelineValue`) and validated by its own `workflowkit` |
+| `kind:pipeline` | the `kind: pipeline` entity (`stage:`), declared by this plugin (`#Pipeline`/`#PipelineValue`) and validated by its own `workflowkit` |
 | `verb:agent` … `verb:gate` | the seven lifted stage verbs |
 
 - **`charly pipeline run <entity>`** — resolve a `kind: pipeline` entity from

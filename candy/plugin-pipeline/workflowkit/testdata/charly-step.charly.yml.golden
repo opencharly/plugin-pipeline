@@ -8,3 +8,9 @@
 # the ONE form that works for a flat import.
 import:
     - ../../../charly.yml
+_pipeline-charly-step-only:
+    task:
+        description: lowered from pipeline stage charly-step/only
+        plan:
+            - run: run the command
+              command: echo hello
