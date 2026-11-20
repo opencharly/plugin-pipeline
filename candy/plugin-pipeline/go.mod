@@ -7,8 +7,8 @@ require (
 	github.com/emicklei/dot v1.11.0
 	github.com/openai/openai-go/v3 v3.61.0
 	github.com/opencharly/plugin-gh v0.2026252.1501
-	github.com/opencharly/sdk v0.2026316.1524
-	github.com/opencharly/spec v0.2026315.2118
+	github.com/opencharly/sdk v0.2026324.8
+	github.com/opencharly/spec v0.2026323.2211
 	gopkg.in/yaml.v3 v3.0.1
 )
 

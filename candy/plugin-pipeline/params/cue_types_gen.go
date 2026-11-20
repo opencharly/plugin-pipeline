@@ -240,15 +240,6 @@ type PipelineGateInput struct {
 	Condition string `yaml:"condition,omitempty" json:"condition"`
 }
 
-// #PipelineRetry — lobster `retry`: retry the failed step up to `max` attempts.
-type PipelineRetry struct {
-	Max int64 `yaml:"max,omitempty" json:"max,omitempty"`
-
-	DelayMs int64 `yaml:"delay_ms,omitempty" json:"delay_ms,omitempty"`
-
-	Factor any/* CUE number; int64 or float64 */ `yaml:"factor,omitempty" json:"factor,omitempty"`
-}
-
 // #PipelineApproval — the OBJECT form of lobster `approval`. The AUTHORED form is a
 // union (bool | string | this struct) so `approval: true` stays terse; an engine
 // normalizes it to this object form before it evaluates the gate.
@@ -277,7 +268,7 @@ type PipelineFlow struct {
 
 	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
 
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Retry spec.Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
 }
 
 // #PipelineArms — the EXEC arms the authored pipeline step carries. Declared ONCE here
@@ -366,7 +357,7 @@ type PipelineSubStep struct {
 
 	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
 
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Retry spec.Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
 }
 
 // #PipelineInput — the lobster `input` gate. `response_schema` is a JSON Schema
@@ -397,7 +388,7 @@ type PipelineStepBase struct {
 
 	OnError string `yaml:"on_error,omitempty" json:"on_error,omitempty"`
 
-	Retry PipelineRetry `yaml:"retry,omitempty" json:"retry,omitempty"`
+	Retry spec.Retry `yaml:"retry,omitempty" json:"retry,omitempty"`
 
 	// approval — terse authored union; an engine normalizes it to #PipelineApproval.
 	Approval any `yaml:"approval,omitempty" json:"approval,omitempty"`
