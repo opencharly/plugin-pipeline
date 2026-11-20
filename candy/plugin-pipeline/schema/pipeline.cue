@@ -198,13 +198,6 @@ import "github.com/opencharly/spec/schema"
 // closedness of the surrounding def), and the lowering special-cases no word, so a
 // plugin released tomorrow is usable in a workflow with no change to this file.
 
-// #PipelineRetry — lobster `retry`: retry the failed step up to `max` attempts.
-#PipelineRetry: {
-	max?:      int & >0
-	delay_ms?: int & >=0 @go(DelayMs)
-	factor?:   number & >=1
-}
-
 // #PipelineApproval — the OBJECT form of lobster `approval`. The AUTHORED form is a
 // union (bool | string | this struct) so `approval: true` stays terse; an engine
 // normalizes it to this object form before it evaluates the gate.
@@ -225,7 +218,7 @@ import "github.com/opencharly/spec/schema"
 	stdin?:      string & !=""
 	timeout_ms?: int & >0 @go(TimeoutMs)
 	on_error?:   or(_onErrorWord) @go(OnError)
-	retry?:      #PipelineRetry
+	retry?:      schema.#Retry
 }
 
 // #PipelineArms — the EXEC arms the authored pipeline step carries. Declared ONCE here
