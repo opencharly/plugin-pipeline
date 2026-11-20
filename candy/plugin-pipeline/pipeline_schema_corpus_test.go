@@ -73,10 +73,19 @@ func TestPipelineValueClosedness(t *testing.T) {
 				env: {FOO: "bar", BAR: "${pr}"},
 				cwd: "/tmp", stdin: "$prev.stdout",
 				timeout_ms: 5000, on_error: "continue",
-				retry: {max: 3, delay_ms: 100, factor: 2.0},
+				retry: {attempt: 3, until: "5m", interval: "2s"},
 				approval: {message: "ok?", timeout_ms: 60000},
 			}]}`,
 			false,
+		},
+		{
+			// D-FLOW-2 / spec#Retry: the RETIRED timed retry. `attempt` is the declared,
+			// bounded count and `until` names the condition that ends it; `max` with an
+			// unbounded exponential `factor` is what #Retry REPLACED. This case fails the
+			// moment #PipelineRetry comes back, so it is the coverage for the cutover.
+			"retired timed retry rejected",
+			`{description: "d", steps: [{id: "s1", run: "echo hi", retry: {max: 3, delay_ms: 100, factor: 2.0}}]}`,
+			true,
 		},
 		{
 			"terse approval union accepted",
