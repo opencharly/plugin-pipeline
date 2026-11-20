@@ -177,10 +177,16 @@ func loadEntity(name string, ex *sdk.Executor) (params.Pipeline, error) {
 			wrongKindPath = path
 			return false, nil // keep looking for a real pipeline entity
 		}
-		// The registrar makes an authored `<word>: <scalar>` plugin-verb sugar
-		// desugarable (the scalar shorthand needs the verb's PRIMARY field). Without a
-		// host executor there is no registry to ask, so the empty registrar stands and a
-		// scalar sugar fails LOUDLY instead of being silently dropped.
+		// The registrar makes an authored `<word>: <scalar>` plugin-verb sugar desugarable:
+		// the scalar shorthand needs the verb's PRIMARY field, and `Primaries` is that
+		// registry-derived DATA. Without a host executor no registry is asked, so the empty
+		// registrar stands.
+		//
+		// MEASURED, and it contradicts what this comment used to say: an empty registrar does
+		// NOT make a scalar sugar "fail loudly". `TestDecodePipelineInputResolvesScalarSugarWithAPrimary`
+		// decodes the same document with `spec.Threaded{}` and gets NO error — the word is carried
+		// and any failure surfaces later, at execution. The claim is corrected here rather than
+		// parked in an issue (R1: a comment its own test disproves is a defect in the diff).
 		threaded := spec.Threaded{}
 		if ex != nil {
 			threaded = loaderkit.LoaderThreadedViaExecutor(context.Background(), ex)
